@@ -213,7 +213,12 @@ class EnvConfig(BaseConfig):
                 if agent.timeout.rollout is not None:
                     self.legacy.extra_env_kwargs["timeout_seconds"] = agent.timeout.rollout
                 if agent.max_output_tokens is not None:
-                    self.legacy.extra_env_kwargs["max_total_completion_tokens"] = agent.max_output_tokens
+                    # A legacy multi-turn environment may need a larger total
+                    # rollout budget than its per-turn sampling cap. Preserve
+                    # an explicit TOML override in legacy.extra_env_kwargs.
+                    self.legacy.extra_env_kwargs.setdefault(
+                        "max_total_completion_tokens", agent.max_output_tokens
+                    )
         return self
 
 
@@ -539,7 +544,10 @@ class OrchestratorConfig(BaseConfig):
     """Rollout-mode batching only. Multiplier used to derive ``max_inflight_episodes`` from ``batch_size`` when ``max_inflight_episodes`` is unset. Values below 1.0 intentionally cap in-flight episode capacity below ``batch_size``."""
 
     max_inflight_episodes: int | None = Field(None, ge=1)
-    """Maximum number of episodes kept in-flight — one episode is one agent run at a time, whatever the env's agents are. Required for token-based batching. With ``batch_size`` set, defaults to ``batch_size * oversampling_factor`` (or ``batch_size`` when ``oversampling_factor`` is unset)."""
+    """Maximum number of training episodes kept in-flight — one episode is one agent run at a time, whatever the env's agents are. Required for token-based batching. With ``batch_size`` set, defaults to ``batch_size * oversampling_factor`` (or ``batch_size`` when ``oversampling_factor`` is unset)."""
+
+    eval_max_inflight_episodes: int | None = Field(None, ge=1)
+    """Maximum number of evaluation episodes kept in-flight. Defaults to ``max_inflight_episodes``. Combined train + eval work is capped at the larger of the two limits."""
 
     group_size: int = Field(1, ge=1)
     """Output sequences returned per example during training."""
@@ -703,6 +711,16 @@ class OrchestratorConfig(BaseConfig):
 
         if self.max_inflight_episodes is not None and self.max_inflight_episodes < self.group_size:
             raise ValueError("max_inflight_episodes must be at least the number of rollouts per example")
+
+        assert self.max_inflight_episodes is not None
+        if self.eval_max_inflight_episodes is None:
+            self.eval_max_inflight_episodes = self.max_inflight_episodes
+        if self.eval is not None:
+            max_eval_group_size = max(source.group_size for source in self.eval.source)
+            if self.eval_max_inflight_episodes < max_eval_group_size:
+                raise ValueError(
+                    "eval_max_inflight_episodes must be at least the number of rollouts per eval example"
+                )
 
         # Propagate the top-level ``group_size`` into each train env that didn't set its own.
         for env_cfg in self.train.source:
