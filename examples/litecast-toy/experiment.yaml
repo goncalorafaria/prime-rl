@@ -51,8 +51,8 @@ tasks:
   - middle
   resources:
     gpuCount: 0
-    cpuCount: 32
-    memory: 128 GiB
+    cpuCount: 16
+    memory: 64 GiB
   datasets:
   - mountPath: /gscratch/ark/graf
     source:
@@ -165,11 +165,17 @@ rexs:
     tasks:
     - inference
     profile: profile-a40.yaml
+    independent_replicas: true
   completion_task: trainer
   failure_policies:
+    trainer:
+      action: fail_experiment
     head:
-      action: fail_experiment
+      action: restart
+      max_restarts: 10
     middle:
-      action: fail_experiment
+      action: restart
+      max_restarts: 10
     inference:
-      action: fail_experiment
+      action: restart
+      max_restarts: 10

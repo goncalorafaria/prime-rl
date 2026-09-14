@@ -171,13 +171,35 @@ async def test_publish_gateway_late_join_preemption_and_expiry(tmp_path, monkeyp
                     )
                     response.raise_for_status()
                     assert response.json()["choices"][0]["text"] == "2.0"
+                # An added replica must keep following future updates, not just
+                # download a snapshot once when it joins.
+                save_file(
+                    {"lora_A.weight": np.array([3.0], dtype=np.float32)},
+                    str(directory / "adapter_model.safetensors"),
+                )
+                third = await publisher.publish(directory, 3)
+                await publisher.wait_ready(third.model_name, 10)
+                async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", timeout=10) as client:
+                    for publication, expected in [(second, "2.0"), (third, "3.0")]:
+                        response = await client.post(
+                            "/v1/completions", json={"model": publication.model_name, "prompt": "search"}
+                        )
+                        response.raise_for_status()
+                        assert response.json()["model"] == publication.model_name
+                        assert response.json()["choices"][0]["text"] == expected
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"http://127.0.0.1:{late_worker.args.port}/v1/completions",
+                        json={"model": third.model_name[:-64] + "f" * 64, "prompt": "search"},
+                    )
+                    assert response.status_code == 503
                 # Publisher loss withdraws readiness; a cached gateway cannot
                 # trick a surviving worker into serving a stale policy.
                 publisher.task.cancel()
                 await asyncio.gather(publisher.task, return_exceptions=True)
                 await publisher.store.delete(desired_key(config.run_id))
                 async with asyncio.timeout(10):
-                    while late_worker.serving:
+                    while late_worker.available(base_alias(config.run_id)):
                         await asyncio.sleep(0.05)
                 async with httpx.AsyncClient() as client:
                     response = await client.post(

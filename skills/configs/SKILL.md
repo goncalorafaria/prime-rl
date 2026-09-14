@@ -157,3 +157,20 @@ mode and a Rex-specific run name. LiteCast update metrics use
 Worker fetch/load timings are carried in readiness registration metadata. Check
 `litecast/measured_replicas` before interpreting averages; a missing sample is
 not a zero-duration transfer. End-to-end readiness includes middle propagation.
+
+### Elastic LiteCast inference
+
+Rex extension requires `independent_replicas: true` on the inference allocation
+at submission; `rexs extend ID inference --replicas N` adds N replicas using the
+stored experiment spec and preserves its experiment ID. Keep that ID as the
+LiteRegistry/LiteCast run namespace, and choose per-replica vLLM RPC ports as well
+as HTTP ports. The toy uses bounded Rex restart policies for non-trainer roles. Trainer exit
+triggers experiment cleanup; readiness timeouts and restart budgets still apply.
+LiteCast groups must pin the immutable model name alongside the policy step;
+saved trace info carries both `policy_version` and `inference_model_name`.
+
+For the offline toy, materialize GPU model configs with the local pinned snapshot
+path. Caching a commit alone does not create a cached `main` ref, so leaving the
+Hub repo name in the RL model config can break `pre_download_model` offline.
+The replaceable head uses shared Redis AOF and advertises backend endpoints;
+trainer-owned TCP relays publish stable client URLs via the SQLite bootstrap.

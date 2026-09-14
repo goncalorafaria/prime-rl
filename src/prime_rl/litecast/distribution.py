@@ -12,6 +12,7 @@ from uuid import uuid4
 import redis.asyncio as redis
 from literegistry import RegistryClient, get_kvstore
 from literegistry.registry import ServerRegistry
+from redis.exceptions import RedisError
 
 from litecast import ClientNode, OriginServer
 from prime_rl.litecast.protocol import Publication, desired_key, pack_adapter, peer_service
@@ -111,6 +112,15 @@ class Publisher:
                 if self.fenced:
                     return
 
+    async def registry_retry(self, operation, *args, **kwargs):
+        async with asyncio.timeout(getattr(self.config, "update_timeout", 600)):
+            while True:
+                try:
+                    return await operation(*args, **kwargs)
+                except (OSError, RedisError) as exc:
+                    logger.warning("Waiting for registry recovery: %s", exc)
+                    await asyncio.sleep(self.config.poll_seconds)
+
     async def publish(self, directory: Path, step: int) -> Publication:
         if self.fenced:
             raise RuntimeError("publisher was replaced by another controller")
@@ -131,7 +141,8 @@ class Publisher:
         )
         async with self.refresh_lock:
             registration = ServerRegistry(self.store, max_heartbeat_interval=self.config.lease_seconds)
-            await registration.register_server(
+            await self.registry_retry(
+                registration.register_server,
                 f"http://{self.config.origin_host}",
                 self.origin.port,
                 {
@@ -146,7 +157,7 @@ class Publisher:
                 await self.sources[digest][0].deregister()
             self.sources[digest] = (registration, version)
             self.publications = (self.publications + [publication])[-self.config.retain_versions :]
-        await self.refresh()
+        await self.registry_retry(self.refresh)
         return publication
 
     async def wait_ready(self, model_name: str, timeout: float, force: bool = True):
@@ -154,13 +165,13 @@ class Publisher:
             while True:
                 if self.fenced:
                     raise RuntimeError("publisher was replaced by another controller")
-                ready = await self.registry.get_all(model_name, force=force)
+                ready = await self.registry_retry(self.registry.get_all, model_name, force=force)
                 if len(ready) >= self.config.min_replicas:
                     return
                 await asyncio.sleep(self.config.poll_seconds)
 
     async def transfer_metrics(self, publication: Publication) -> dict[str, float]:
-        records = (await self.registry.models(force=True)).get(publication.model_name, [])
+        records = (await self.registry_retry(self.registry.models, force=True)).get(publication.model_name, [])
         samples = [
             r["metadata"]["litecast_transfer"]
             for r in records

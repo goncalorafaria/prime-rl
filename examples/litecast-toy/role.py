@@ -51,16 +51,40 @@ def watch(records):
         time.sleep(2)
 
 
+def validate_lora_config():
+    training = tomllib.loads((HERE / "train.toml").read_text())
+    inference = tomllib.loads((HERE / "inference.toml").read_text())
+    lora = training["trainer"]["model"]["lora"]
+    if not inference.get("enable_lora"):
+        raise ValueError("Separate inference must set enable_lora=true")
+    if inference.get("max_lora_rank", 0) < lora["rank"]:
+        raise ValueError("Separate inference max_lora_rank must cover the trainer LoRA rank")
+    if inference["model"]["name"] != training["model"]["name"]:
+        raise ValueError("Trainer and separate inference must use the same base model")
+    targets = inference.get("lora_target_modules")
+    if targets is not None and not set(lora["target_modules"]).issubset(targets):
+        raise ValueError("Separate inference must support every trainer LoRA target module")
+    print(
+        f"LORA_CONFIG_VALIDATED separate_inference=true enable_lora=true "
+        f"trainer_rank={lora['rank']} max_lora_rank={inference['max_lora_rank']}",
+        flush=True,
+    )
+
+
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     os.chdir(ROOT)
     role = sys.argv[1]
+    if role in ("trainer", "inference"):
+        validate_lora_config()
     os.environ.update(RUN_ID=RUN, ADVERTISE_HOST=HOST, TOKENIZERS_PARALLELISM="false")
     if role == "head":
         redis_port, gateway_port = free_port(), free_port()
         registry = f"redis://{HOST}:{redis_port}/0"
         os.environ["REGISTRY_PATH"] = registry
         os.environ["REGISTRY"] = registry
+        redis_directory = OUTPUT / "redis"
+        redis_directory.mkdir(exist_ok=True)
         start(
             "/gscratch/ark/graf/redis-stable/src/redis-server",
             "--bind",
@@ -72,7 +96,11 @@ def main():
             "--save",
             "",
             "--appendonly",
-            "no",
+            "yes",
+            "--appendfsync",
+            "everysec",
+            "--dir",
+            str(redis_directory),
         )
         deadline = time.monotonic() + 60
         while not endpoint_healthy(registry, "redis", 2):
@@ -90,8 +118,23 @@ def main():
             str(gateway_port),
         )
         gateway = f"http://{HOST}:{gateway_port}"
-        watch({"redis": registry, "gateway": gateway})
+        watch({"redis-backend": registry, "gateway-backend": gateway})
         return
+    if role == "trainer":
+        python(
+            "-m",
+            "prime_rl.litecast.relay",
+            "--bootstrap",
+            HEAD,
+            "--run-id",
+            RUN,
+            "--advertise-host",
+            HOST,
+            "--redis-port",
+            str(free_port()),
+            "--gateway-port",
+            str(free_port()),
+        )
     registry = wait(HEAD, "redis", timeout=3600, healthcheck="redis")
     gateway = wait(HEAD, "gateway", timeout=3600, healthcheck="http")
     os.environ.update(REGISTRY=registry, GATEWAY_URL=gateway)
@@ -126,7 +169,22 @@ def main():
     elif role == "inference":
         backend, sidecar, shards = free_port(), free_port(), free_port()
         os.environ["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "1"
-        start("uv", "run", "--no-sync", "inference", "@", str(HERE / "inference.toml"), "--server.port", str(backend))
+        inference_config = tomllib.loads((HERE / "inference.toml").read_text())
+        inference_config["model"]["name"] = str(snapshot)
+        inference_path = OUTPUT / f"inference-{os.environ.get('BEAKER_REPLICA_RANK', '0')}.toml"
+        inference_path.write_text(tomli_w.dumps(inference_config))
+        start(
+            "uv",
+            "run",
+            "--no-sync",
+            "inference",
+            "@",
+            str(inference_path),
+            "--server.port",
+            str(backend),
+            "--data-parallel-rpc-port",
+            str(free_port()),
+        )
         python(
             "-m",
             "prime_rl.litecast.worker",
@@ -135,7 +193,7 @@ def main():
             "--run-id",
             RUN,
             "--base-model",
-            "Qwen/Qwen3.5-2B",
+            str(snapshot),
             "--advertise-host",
             HOST,
             "--backend-url",
@@ -151,6 +209,7 @@ def main():
         for rank in range(2):
             wait(HEAD, f"middle-{rank}", timeout=3600, healthcheck="none")
         config = tomllib.loads((HERE / "train.toml").read_text())
+        config["model"]["name"] = str(snapshot)
         config["output_dir"] = str(OUTPUT / "training")
         config["wandb"]["name"] = RUN
         os.environ["WANDB_MODE"] = "online"
@@ -159,7 +218,13 @@ def main():
         client["litecast"].update(registry=registry, run_id=RUN, origin_host=HOST, origin_port=free_port())
         destination = OUTPUT / "train.toml"
         destination.write_text(tomli_w.dumps(config))
-        result = start("uv", "run", "--no-sync", "rl", "@", str(destination)).wait()
+        training = start("uv", "run", "--no-sync", "rl", "@", str(destination))
+        while training.poll() is None:
+            for child in children:
+                if child is not training and child.poll() is not None:
+                    raise RuntimeError("Trainer coordination relay exited")
+            time.sleep(1)
+        result = training.returncode
         if result:
             raise SystemExit(result)
         print("TRAINING_SMOKE_COMPLETED " + str(OUTPUT), flush=True)

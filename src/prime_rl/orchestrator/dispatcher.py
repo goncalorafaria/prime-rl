@@ -403,6 +403,9 @@ class RolloutDispatcher:
             target_rollouts=group_size,
             eval_step=eval_step,
             policy_version_at_start=self.policy.version,
+            policy_model_name_at_start=(
+                self.policy.model_name if getattr(self.policy_pool, "litecast_config", None) is not None else None
+            ),
         )
 
     async def schedule_group_rollout(self, group_id: uuid.UUID, group: GroupState) -> bool:
@@ -421,6 +424,11 @@ class RolloutDispatcher:
             live_sourced = True
         else:
             pool, model_name, live_sourced = self._train_pool_for(group.env_name)
+
+        # Immutable LiteCast adapters let every request in a group use the
+        # policy captured at creation, even across awaits and weight updates.
+        if live_sourced and group.policy_model_name_at_start is not None:
+            model_name = group.policy_model_name_at_start
 
         # Pin a single client per group to keep prefix-cache hits
         if group.pinned_client is None:
@@ -487,6 +495,7 @@ class RolloutDispatcher:
             group_id=group_id,
             policy_version=group.policy_version_at_start,
             rollout_count=permits,
+            inference_model_name=model_name,
             client_config=client,
             eval_step=group.eval_step,
         )
@@ -579,6 +588,7 @@ class RolloutDispatcher:
             rollout.env_name = meta.env_name
             rollout.group_id = meta.group_id
             rollout.policy_version = policy_version
+            rollout.inference_model_name = meta.inference_model_name
             rollout.off_policy_steps = meta.off_policy_steps
             if meta.kind == "eval":
                 assert eval_step is not None, "eval rollout missing eval_step"

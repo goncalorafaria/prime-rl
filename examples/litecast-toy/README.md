@@ -9,9 +9,8 @@ Allocations: CPU head (Redis + gateway), two independent CPU middle nodes,
 one A40 trainer/orchestrator and one A40 vLLM worker. The worker requires a
 registry-advertised middle source for adapter loads. LiteCast itself remains
 independent of LiteRegistry; `prime_rl.litecast.middle` owns discovery,
-verification and registration. The trainer is the Rex completion task; a
-service allocation failure fails the experiment and cleanup is restricted to
-its owned allocations. Keep Rex controller refresh active.
+verification and registration. The trainer is the Rex completion task; its exit triggers cleanup of all owned
+allocations. Head, middle and inference failures have bounded restart policies. Keep Rex controller refresh active.
 
 The profiles use the local Klone account, pinned Ubuntu CUDA SIF and isolated
 training environment at `outputs/toy-runtime-host`. Install that environment
@@ -85,12 +84,79 @@ update rather than only on the periodic dashboard tick, so short runs keep them.
 
 ## CPU and memory reservations
 
-The head requests 4 cores / 16 GiB. Each middle requests 32 cores / 128 GiB
+The head requests 4 cores / 16 GiB. Each middle requests 16 cores / 64 GiB
 on an exclusive CPU host; independent allocations plus node exclusivity prevent
 the two middles from sharing a host. The site-specific middle profile excludes
 the GPU hosts in Klone's checkpoint partition. Refresh that list if the cluster
 inventory changes. Exclusive scheduling reserves the host's CPUs; the middle
-process receives its requested 32-core task allocation and 128 GiB memory limit.
+process receives its requested 16-core task allocation and 64 GiB memory limit.
 Trainer and inference each request one A40, 8 CPU cores and 96 GiB, with a
 one-hour limit for startup and the short training smoke. They may share a GPU
 host with separate reserved resources. These requests can wait longer in queue.
+
+The generic launcher warning “LoRA is enabled, but inference is not configured”
+refers to its absent local inference block. This experiment launches inference
+as a separate Rex task with `enable_lora=true` and `max_lora_rank=8`. Both GPU
+roles validate those settings, the base model and target modules before startup,
+and print `LORA_CONFIG_VALIDATED`. The warning alone does not indicate LoRA is
+disabled on the separate worker.
+
+## Adding inference replicas
+
+Submit with the inference allocation marked `independent_replicas: true`, then:
+
+```bash
+rexs extend EXPERIMENT_ID inference --replicas 2 --strict
+```
+
+This adds two replicas. Rex preserves `REXS_EXPERIMENT_ID` and assigns new replica
+ranks. The same role launcher therefore discovers the existing head, Redis and
+gateway, and joins the same LiteCast run. Ports, including vLLM's data-parallel
+RPC port, are chosen per process. Workers fetch the newest retained adapter first
+through a registered middle, verify the bundle SHA-256, load it into vLLM, then
+advertise its immutable model name. The gateway discovers added workers without
+changing the trainer's URL. Each worker continues following later publications.
+Inference allocation failure triggers a bounded restart, allowing surviving replicas to serve;
+if no replica is available, readiness waits remain bounded by the configured
+timeout. Keep Rex controller refresh active for cleanup, including added jobs.
+
+A LiteCast rollout group captures both policy step and immutable model name at
+creation. All its requests, including later turns and retries, keep that model
+name even if training advances. Saved trace info includes `policy_version` and
+`inference_model_name`; adapter names contain the run ID, step and full SHA-256.
+Workers reject unavailable versions rather than serving another version under
+the requested name. Retired versions can therefore fail a long-running rollout;
+size `retain_versions` / `max_versions` for the allowed rollout lifetime.
+This is application-level provenance using verified adapter bytes and trusted
+vLLM workers, not hardware attestation. The base alias denotes the pinned base
+checkpoint before any adapter publication.
+
+Rex uses the experiment's stored submission spec for extension. An experiment
+submitted before the inference allocation was marked independent cannot acquire
+that capability merely by editing this YAML. Existing allocations have not been
+cancelled or resubmitted for this change.
+
+## Failure and head recovery
+
+Trainer exit (success, error or cancellation) terminates the experiment's owned
+allocations. The saved Rex policy restarts head, middle and inference failures up
+to ten times per allocation; an exhausted budget still fails the experiment.
+These policies require the Rex controller to keep refreshing the experiment.
+A replaced worker/middle rebuilds its cache from the current publisher.
+
+The head persists Redis AOF under the run's shared `redis/` directory. Redis uses
+`appendfsync everysec`; a host crash can lose the most recent second, and live
+publisher/worker heartbeats rebuild discovery metadata. The head publishes its
+current backend addresses in the shared SQLite bootstrap. Trainer-owned TCP
+relays expose stable Redis/gateway URLs and resolve the head on each connection,
+so clients reconnect after a head replacement changes hosts or ports. A dropped
+request can fail and require retry; recovery is not uninterrupted service.
+Adapter byte transfers remain direct through LiteCast, bypassing these relays.
+The relay is part of the trainer allocation: its failure is a trainer failure.
+Registry publication/readiness retries are bounded by the configured timeouts;
+recovery that exceeds them can still fail training.
+
+GPU roles materialize the model name as the downloaded local snapshot path before
+enabling offline Hub access. This avoids an unpinned `main` lookup in the RL
+launcher's pre-download step. Every role uses the same pinned revision and cache
+layout; base-model identity checks reject a mismatched worker path.

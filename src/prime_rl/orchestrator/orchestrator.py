@@ -546,6 +546,7 @@ class Orchestrator:
                     group_id=str(rollout.group_id),
                     episode_id=rollout.episode_id,
                     policy_version=rollout.policy_version,
+                    inference_model_name=rollout.inference_model_name,
                 )
             await asyncio.to_thread(
                 save_rollouts,

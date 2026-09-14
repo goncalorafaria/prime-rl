@@ -48,6 +48,7 @@ class InflightRollout:
     group_id: uuid.UUID
     policy_version: int
     rollout_count: int
+    inference_model_name: str | None = None
     client_config: vf.ClientConfig | None = None
     off_policy_steps: int = 0
     eval_step: int | None = None
@@ -70,6 +71,7 @@ class GroupState:
     eval_step: int | None = None
     pinned_client: vf.ClientConfig | None = None
     policy_version_at_start: int = 0
+    policy_model_name_at_start: str | None = None
 
 
 class Rollout(vf.Trace[DataT], Generic[DataT]):
@@ -95,6 +97,7 @@ class Rollout(vf.Trace[DataT], Generic[DataT]):
     # saved records keep their grouping.
     episode_id: str = Field(default="", exclude=True)
     policy_version: int = Field(default=0, exclude=True)
+    inference_model_name: str | None = Field(default=None, exclude=True)
     off_policy_steps: int = Field(default=0, exclude=True)
     samples: list[TrainingSample] = Field(default_factory=list, exclude=True)
     # Per-token rl advantage stream, full-length-N (= len(token_ids)) per

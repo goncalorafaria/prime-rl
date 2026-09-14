@@ -202,7 +202,8 @@ async def test_registry_middle_supervisors_publish_ready_sources(tmp_path):
         (tmp_path / "adapter_model.safetensors").write_bytes(b"supervised-adapter")
         publication = await publisher.publish(tmp_path, 1)
         service = peer_service(config.run_id, publication.digest)
-        async with asyncio.timeout(30):
+        # Supervisor imports may cold-start from a shared filesystem.
+        async with asyncio.timeout(120):
             while True:
                 assert all(p.poll() is None for p in processes), [p.returncode for p in processes]
                 records = (await publisher.registry.models(force=True)).get(service, [])
