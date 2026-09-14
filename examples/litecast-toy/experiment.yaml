@@ -156,7 +156,7 @@ rexs:
   - name: inference
     tasks:
     - inference
-    profile: profile-l40.yaml
+    profile: profile-a40.yaml
   completion_task: trainer
   failure_policies:
     head:

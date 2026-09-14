@@ -128,7 +128,13 @@ instead; it preserves the source as an array of tables.
 For a self-contained LiteCast training smoke without search/judge services, use
 `examples/litecast-toy/train.toml` (`reverse-text-v1`, deterministic reversal
 similarity reward). Its unified Rex spec owns a CPU head, two CPU middles,
-one A40 trainer and one L40 inference worker. `prime_rl.litecast.middle`
+one A40 trainer and one A40 inference worker. `prime_rl.litecast.middle`
 provides registry supervision outside the standalone LiteCast package.
 The worker's `--require-middle` option restricts weight downloads to registered
 middle sources and fails closed while none are ready.
+
+In the toy config, gradient offloading uses `trainer.model.fsdp_cpu_offload`,
+which also offloads parameters and optimizer states. Set
+`trainer.model.optim_cpu_offload=false` when enabling it; those two offload
+paths are mutually exclusive. Activation offloading uses the
+`[trainer.model.ac_offloading]` section.

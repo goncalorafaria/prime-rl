@@ -6,7 +6,7 @@ computed correct reversal; no search service, terminal service or judge model
 is needed. This is a deterministic graded reward, not an LLM judge.
 
 Allocations: CPU head (Redis + gateway), two independent CPU middle nodes,
-one A40 trainer/orchestrator and one L40 vLLM worker. The worker requires a
+one A40 trainer/orchestrator and one A40 vLLM worker. The worker requires a
 registry-advertised middle source for adapter loads. LiteCast itself remains
 independent of LiteRegistry; `prime_rl.litecast.middle` owns discovery,
 verification and registration. The trainer is the Rex completion task; a
@@ -40,3 +40,9 @@ CPU test or successful submission alone is not a completed training smoke.
 Offline preflight completed: Rex strict validation (five allocations), both
 TOML schemas, head Redis/gateway bootstrap, and real middle supervisor source
 registration and withdrawal. GPU outcome is recorded separately after execution.
+
+The toy explicitly enables `[trainer.model.ac_offloading]` with pinned memory
+and `trainer.model.fsdp_cpu_offload=true`. FSDP offloads gradients together
+with parameters and optimizer state; this fork has no gradient-only offload
+flag. `optim_cpu_offload=false` avoids enabling the mutually exclusive
+optimizer-only path. Activation checkpointing stays enabled.
