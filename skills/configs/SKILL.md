@@ -143,3 +143,7 @@ For LiteCast sidecars, set `router="None"` at the root of the standalone
 inference TOML. PrimeRL otherwise starts a local vllm-router by default, while
 the sidecar needs the engine's native LoRA admin endpoints. The LiteRegistry
 gateway already handles external request routing.
+
+The colocated toy trainer/orchestrator uses `[rollout_transport] type="filesystem"`
+to avoid default ZeroMQ port 5555 collisions with unrelated jobs on shared nodes.
+This is separate from the LiteCast weight transport to remote inference.

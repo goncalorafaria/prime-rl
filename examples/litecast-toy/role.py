@@ -95,6 +95,18 @@ def main():
     registry = wait(HEAD, "redis", timeout=3600, healthcheck="redis")
     gateway = wait(HEAD, "gateway", timeout=3600, healthcheck="http")
     os.environ.update(REGISTRY=registry, GATEWAY_URL=gateway)
+    if role in ("trainer", "inference"):
+        from huggingface_hub import snapshot_download
+
+        revision = "15852e8c16360a2fea060d615a32b45270f8a8fc"
+        snapshot = snapshot_download("Qwen/Qwen3.5-2B", revision=revision)
+        print(f"MODEL_STAGED revision={revision} path={snapshot}", flush=True)
+        if role == "trainer":
+            from datasets import load_dataset
+
+            load_dataset("PrimeIntellect/Reverse-Text-RL", split="train")
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
+        os.environ["HF_HUB_OFFLINE"] = "1"
     if role == "middle":
         port = free_port()
         python(

@@ -118,3 +118,6 @@ keep_last = 3
 
 [log]
 level = "info"
+
+[rollout_transport]
+type = "filesystem"

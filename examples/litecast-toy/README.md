@@ -52,3 +52,10 @@ Install the selected taskset explicitly in the runtime as well:
 Workspace membership alone does not install this taskset. The inference config
 sets `router="None"` to expose the native vLLM LoRA admin endpoints locally;
 external requests still pass through the LiteRegistry gateway.
+
+The local trainer/orchestrator rollout handoff uses filesystem transport to
+avoid default ZeroMQ port collisions on shared nodes. Before startup, each GPU
+role stages Qwen3.5-2B revision `15852e8c16360a2fea060d615a32b45270f8a8fc`;
+the trainer also caches the reverse-text dataset. The runtime then uses offline
+Hub access so model/tokenizer initialization does not repeatedly resolve remote
+endpoints. Adapter distribution still requires LiteCast middle sources.
