@@ -13,6 +13,7 @@ name = "Qwen/Qwen3.5-2B"
 enable_token_export = true
 
 [trainer.model]
+compile = "None"
 # FSDP offloads parameters, gradients, and optimizer states together.
 fsdp_cpu_offload = true
 optim_cpu_offload = false

@@ -20,6 +20,7 @@ host = "127.0.0.1"
 port = 8000
 
 [model]
+enforce_eager = true
 name = "Qwen/Qwen3.5-2B"
 max_model_len = 1024
 dtype = "bfloat16"
