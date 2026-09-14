@@ -124,3 +124,11 @@ The pinned CLI rejects numeric source-list overrides such as
 launcher, materialize those addresses in TOML with
 `uv run python -m prime_rl.litecast.launch --write-config /tmp/search.toml`
 instead; it preserves the source as an array of tables.
+
+For a self-contained LiteCast training smoke without search/judge services, use
+`examples/litecast-toy/train.toml` (`reverse-text-v1`, deterministic reversal
+similarity reward). Its unified Rex spec owns a CPU head, two CPU middles,
+one A40 trainer and one L40 inference worker. `prime_rl.litecast.middle`
+provides registry supervision outside the standalone LiteCast package.
+The worker's `--require-middle` option restricts weight downloads to registered
+middle sources and fails closed while none are ready.

@@ -178,8 +178,12 @@ class Publisher:
             await self.redis.aclose()
 
 
-async def fetch_publication(publication: Publication, registry, output_dir: Path, transport: str) -> bytes:
+async def fetch_publication(
+    publication: Publication, registry, output_dir: Path, transport: str, source_role: str | None = None
+) -> bytes:
     records = (await registry.models(force=True)).get(peer_service(publication.run_id, publication.digest), [])
+    if source_role is not None:
+        records = [r for r in records if r.get("metadata", {}).get("source_role") == source_role]
     random.shuffle(records)
     # Spread load across peers first; origins participate in the same discovery
     # protocol. There is deliberately no address fallback outside LiteRegistry.

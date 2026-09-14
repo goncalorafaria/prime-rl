@@ -145,3 +145,87 @@ async def test_two_middles_registry_transfer_and_loss(tmp_path):
         await control.aclose()
         process.terminate()
         process.wait(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_registry_middle_supervisors_publish_ready_sources(tmp_path):
+    import sys
+
+    config = SimpleNamespace(
+        registry=f"file://{tmp_path / 'registry'}",
+        run_id="supervised",
+        origin_host="127.0.0.1",
+        origin_port=0,
+        transport="http",
+        max_adapter_bytes=4096,
+        retain_versions=2,
+        poll_seconds=0.1,
+        lease_seconds=30,
+        shard_bytes=64,
+        min_replicas=1,
+    )
+    publisher = Publisher(config, "fixture")
+    processes = []
+    logs = []
+    try:
+        await publisher.start()
+        for index in range(2):
+            log = (tmp_path / f"middle-{index}.log").open("w")
+            logs.append(log)
+            processes.append(
+                subprocess.Popen(
+                    [
+                        "uv",
+                        "run",
+                        "--no-project",
+                        "--python",
+                        sys.executable,
+                        "python",
+                        "-m",
+                        "prime_rl.litecast.middle",
+                        "--registry",
+                        config.registry,
+                        "--run-id",
+                        config.run_id,
+                        "--advertise-host",
+                        "127.0.0.1",
+                        "--port",
+                        str(free_port()),
+                        "--max-adapter-bytes",
+                        "4096",
+                    ],
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                )
+            )
+        (tmp_path / "adapter_config.json").write_text('{"peft_type":"LORA","r":8}')
+        (tmp_path / "adapter_model.safetensors").write_bytes(b"supervised-adapter")
+        publication = await publisher.publish(tmp_path, 1)
+        service = peer_service(config.run_id, publication.digest)
+        async with asyncio.timeout(30):
+            while True:
+                assert all(p.poll() is None for p in processes), [p.returncode for p in processes]
+                records = (await publisher.registry.models(force=True)).get(service, [])
+                if sum(r["metadata"].get("source_role") == "middle" for r in records) == 2:
+                    break
+                await asyncio.sleep(0.1)
+        data = await fetch_publication(
+            publication, publisher.registry, tmp_path / "download", "http", source_role="middle"
+        )
+        publication.verify(data)
+        for process in processes:
+            process.terminate()
+            await blocking(process.wait, 10)
+        with pytest.raises(RuntimeError, match="no valid LiteCast source"):
+            # The live origin must not satisfy a middle-only request.
+            await fetch_publication(
+                publication, publisher.registry, tmp_path / "no-middle", "http", source_role="middle"
+            )
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+                await blocking(process.wait, 10)
+        for log in logs:
+            log.close()
+        await publisher.close()

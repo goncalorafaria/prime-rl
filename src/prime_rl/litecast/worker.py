@@ -122,7 +122,13 @@ class Worker:
                     # response was lost. This name has not been advertised here.
                     response = await self.backend.post("/v1/unload_lora_adapter", json={"lora_name": name})
                     response.raise_for_status()
-                payload = await fetch_publication(publication, self.registry, self.root, self.args.transport)
+                payload = await fetch_publication(
+                    publication,
+                    self.registry,
+                    self.root,
+                    self.args.transport,
+                    source_role="middle" if getattr(self.args, "require_middle", False) else None,
+                )
                 config, weights = split_adapter(payload)
                 staging = Path(tempfile.mkdtemp(prefix="adapter-", dir=self.root))
                 (staging / "adapter_config.json").write_bytes(config)
@@ -284,6 +290,7 @@ def main():
     parser.add_argument("--poll-seconds", type=float, default=2)
     parser.add_argument("--lease-seconds", type=float, default=30)
     parser.add_argument("--request-timeout", type=float, default=300)
+    parser.add_argument("--require-middle", action="store_true")
     parser.add_argument("--transport", choices=("http", "auto", "ucxx"), default="http")
     args = parser.parse_args()
     if min(args.max_versions, args.max_adapter_bytes, args.shard_bytes, args.poll_seconds, args.request_timeout) <= 0:
