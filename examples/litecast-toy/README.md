@@ -46,3 +46,9 @@ and `trainer.model.fsdp_cpu_offload=true`. FSDP offloads gradients together
 with parameters and optimizer state; this fork has no gradient-only offload
 flag. `optim_cpu_offload=false` avoids enabling the mutually exclusive
 optimizer-only path. Activation checkpointing stays enabled.
+
+Install the selected taskset explicitly in the runtime as well:
+`uv pip install --python outputs/toy-runtime-host/bin/python -e deps/verifiers/environments/reverse_text_v1`.
+Workspace membership alone does not install this taskset. The inference config
+sets `router="None"` to expose the native vLLM LoRA admin endpoints locally;
+external requests still pass through the LiteRegistry gateway.

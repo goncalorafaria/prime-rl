@@ -138,3 +138,8 @@ which also offloads parameters and optimizer states. Set
 `trainer.model.optim_cpu_offload=false` when enabling it; those two offload
 paths are mutually exclusive. Activation offloading uses the
 `[trainer.model.ac_offloading]` section.
+
+For LiteCast sidecars, set `router="None"` at the root of the standalone
+inference TOML. PrimeRL otherwise starts a local vllm-router by default, while
+the sidecar needs the engine's native LoRA admin endpoints. The LiteRegistry
+gateway already handles external request routing.

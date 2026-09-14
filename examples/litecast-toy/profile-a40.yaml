@@ -9,9 +9,9 @@ dataset_root: /gscratch/ark/graf/data
 run_root: /gscratch/ark/graf/prime-rl-shardcast/outputs/rexs-runs
 images:
   litecast-runtime: /gscratch/ark/graf/vllm-openai_latest-cu129-ubuntu2404.sif
-account: ckpt-ark
-partition: ckpt-all
-qos: ckpt-gpu
+account: gpu-a40-ark
+partition: gpu-a40
+qos: normal
 sbatch:
   no-requeue: true
 gpu_type: a40
