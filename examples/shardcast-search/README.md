@@ -105,7 +105,23 @@ ID and resume the local trainer checkpoint. Only one publisher may own a run.
 The trainer writes its normal PEFT adapter locally. The orchestrator bundles
 `adapter_config.json` and `adapter_model.safetensors`, publishes through
 ShardCast, then advertises the publication descriptor in LiteRegistry with a
-renewable lease. Adapter bytes never go through Redis or the inference gateway.
+renewable lease. The descriptor contains only run, model, step, digest and size;
+it contains no node addresses or node-local ShardCast versions.
+
+Both the trainer origin and worker peer caches register each retained bundle
+under `shardcast:{run_id}:{digest}` using LiteRegistry's existing server API.
+Registrations carry the source address, local ShardCast version and origin/peer
+role. Sources renew heartbeats and withdraw evicted bundles. Workers resolve all
+weight sources through LiteRegistry, try peers first, and fall back to a
+registry-discovered origin. There is no configured-origin discovery bypass.
+
+Inference requests use the existing LiteRegistry gateway. Weight transfers use
+direct ShardCast connections to the endpoints discovered through LiteRegistry;
+adapter bytes never go through Redis or the inference gateway. Consequently,
+workers must be able to reach advertised ShardCast ports across the deployment
+network. LiteRegistry supplies discovery and liveness, not a network tunnel.
+All registration and transfer integration code stays in this PrimeRL fork;
+LiteRegistry itself requires no changes.
 
 Workers load immutable, content-addressed adapter names. They register those
 names only after transfer integrity verification and a successful vLLM load.
@@ -138,7 +154,8 @@ The publisher is a single writer per run; use unique run IDs to isolate jobs.
 The CPU lifecycle test uses real ShardCast HTTP servers, the actual LiteRegistry
 gateway and registry, and an adapter-aware CPU engine that loads real
 safetensors. It tests two immutable adapter versions, peer-assisted late joins,
-replica loss and publisher-lease withdrawal. It does not simulate GPU kernels
+replica loss, publisher-lease withdrawal, registry-only origin discovery,
+heartbeat re-registration and removal of evicted source records. It does not simulate GPU kernels
 or establish training reward/throughput results.
 
 ```bash

@@ -6,7 +6,6 @@ import re
 import struct
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
 
 MAGIC = b"SC-LORA1"
 MAX_CONFIG_BYTES = 1024 * 1024
@@ -62,8 +61,6 @@ class Publication:
     step: int
     digest: str
     size: int
-    origin: str
-    version: str
 
     def __post_init__(self):
         validate_run_id(self.run_id)
@@ -73,13 +70,8 @@ class Publication:
             raise ValueError("invalid bundle size")
         if not re.fullmatch(r"[0-9a-f]{64}", self.digest):
             raise ValueError("invalid bundle digest")
-        if not re.fullmatch(r"v[0-9]+", self.version):
-            raise ValueError("invalid shardcast version")
         if not self.base_model:
             raise ValueError("base_model is required")
-        url = urlsplit(self.origin)
-        if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
-            raise ValueError("invalid origin URL")
 
     @property
     def model_name(self) -> str:

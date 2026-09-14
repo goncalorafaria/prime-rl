@@ -11,9 +11,7 @@ def test_bundle_round_trip_and_corruption(tmp_path):
     (tmp_path / "adapter_config.json").write_text('{"peft_type":"LORA","r":8}')
     (tmp_path / "adapter_model.safetensors").write_bytes(b"tensor-payload")
     payload = pack_adapter(tmp_path, 1024)
-    publication = Publication(
-        "run1", "Qwen/Qwen3.5-2B", 3, hashlib.sha256(payload).hexdigest(), len(payload), "http://origin:8201", "v1"
-    )
+    publication = Publication("run1", "Qwen/Qwen3.5-2B", 3, hashlib.sha256(payload).hexdigest(), len(payload))
     publication.verify(payload)
     assert split_adapter(payload)[1] == b"tensor-payload"
     assert publication.model_name != base_alias("run1")
@@ -32,9 +30,9 @@ def test_reject_malformed_bundle(payload):
 
 
 def test_names_isolate_runs_and_versions():
-    a = Publication("run1", "model", 1, "a" * 64, 100, "http://source:1", "v1")
-    b = Publication("run2", "model", 1, "a" * 64, 100, "http://source:1", "v1")
-    c = Publication("run1", "model", 2, "b" * 64, 100, "http://source:1", "v2")
+    a = Publication("run1", "model", 1, "a" * 64, 100)
+    b = Publication("run2", "model", 1, "a" * 64, 100)
+    c = Publication("run1", "model", 2, "b" * 64, 100)
     assert len({a.model_name, b.model_name, c.model_name}) == 3
     assert Publication(**json.loads(json.dumps(a.to_dict()))) == a
     with pytest.raises(ValueError):

@@ -241,3 +241,53 @@ async def test_prime_rl_pool_publishes_and_keeps_versioned_model_name(tmp_path):
             assert (await pool.select_train_client(defaultdict(int))).base_url == "http://gateway:1212/v1"
     finally:
         await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_weight_sources_require_registry_discovery(tmp_path):
+    from prime_rl.shardcast.distribution import fetch_publication
+    from prime_rl.shardcast.protocol import peer_service
+
+    config = SimpleNamespace(
+        registry=f"file://{tmp_path / 'registry'}",
+        run_id="discovery",
+        origin_host="127.0.0.1",
+        origin_port=free_port(),
+        transport="http",
+        max_adapter_bytes=1024,
+        retain_versions=1,
+        poll_seconds=60,
+        lease_seconds=120,
+        shard_bytes=64,
+        min_replicas=1,
+    )
+    publisher = Publisher(config, "test-2b")
+    directory = tmp_path / "adapter"
+    directory.mkdir()
+    (directory / "adapter_config.json").write_text('{"peft_type":"LORA","r":8}')
+    (directory / "adapter_model.safetensors").write_bytes(b"adapter-one")
+    try:
+        await publisher.start()
+        first = await publisher.publish(directory, 1)
+        assert set(first.to_dict()) == {"run_id", "base_model", "step", "digest", "size"}
+        service = peer_service(config.run_id, first.digest)
+        records = (await publisher.registry.models(force=True))[service]
+        assert len(records) == 1
+        assert records[0]["metadata"]["source_role"] == "origin"
+        payload = await fetch_publication(first, publisher.registry, tmp_path / "download", "http")
+        first.verify(payload)
+
+        # No raw origin fallback: a reachable origin must still be discovered.
+        await publisher.sources[first.digest][0].deregister()
+        with pytest.raises(RuntimeError, match="no valid ShardCast source"):
+            await fetch_publication(first, publisher.registry, tmp_path / "missing", "http")
+        await publisher.refresh()
+        first.verify(await fetch_publication(first, publisher.registry, tmp_path / "renewed", "http"))
+
+        (directory / "adapter_model.safetensors").write_bytes(b"adapter-two")
+        second = await publisher.publish(directory, 2)
+        models = await publisher.registry.models(force=True)
+        assert service not in models
+        assert peer_service(config.run_id, second.digest) in models
+    finally:
+        await publisher.close()

@@ -146,7 +146,13 @@ class Worker:
                 if service in self.peers:
                     await self.peers.pop(service)[0].deregister()
                 self.peers[service] = (
-                    await self.register(service, self.origin.port, shardcast_version=version),
+                    await self.register(
+                        service,
+                        self.origin.port,
+                        shardcast_version=version,
+                        source_role="peer",
+                        digest=publication.digest,
+                    ),
                     version,
                 )
             if name not in self.serving:

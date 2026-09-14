@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import redis.asyncio as redis
 from literegistry import RegistryClient, get_kvstore
+from literegistry.registry import ServerRegistry
 
 from prime_rl.shardcast.protocol import Publication, desired_key, pack_adapter, peer_service
 from shardcast import ClientNode, OriginServer
@@ -45,6 +46,7 @@ class Publisher:
             max_distribution_folders=config.retain_versions,
         )
         self.publications: list[Publication] = []
+        self.sources: dict[str, tuple[ServerRegistry, str]] = {}
         self.fenced = False
         self.owner = uuid4().hex
         self.redis = redis.from_url(config.registry) if config.registry.startswith(("redis://", "rediss://")) else None
@@ -92,6 +94,13 @@ class Publisher:
                 if not written:
                     raise RuntimeError("could not publish adapter descriptor")
 
+            for digest, (registration, version) in list(self.sources.items()):
+                if version not in self.origin.store:
+                    await registration.deregister()
+                    del self.sources[digest]
+                else:
+                    await registration.heartbeat(f"http://{self.config.origin_host}", self.origin.port)
+
     async def heartbeat(self):
         while True:
             await asyncio.sleep(self.config.poll_seconds)
@@ -119,10 +128,24 @@ class Publisher:
             step,
             digest,
             len(payload),
-            f"http://{self.config.origin_host}:{self.origin.port}",
-            version,
         )
-        self.publications = (self.publications + [publication])[-self.config.retain_versions :]
+        async with self.refresh_lock:
+            registration = ServerRegistry(self.store, max_heartbeat_interval=self.config.lease_seconds)
+            await registration.register_server(
+                f"http://{self.config.origin_host}",
+                self.origin.port,
+                {
+                    "model_path": peer_service(self.config.run_id, digest),
+                    "run_id": self.config.run_id,
+                    "digest": digest,
+                    "source_role": "origin",
+                    "shardcast_version": version,
+                },
+            )
+            if digest in self.sources:
+                await self.sources[digest][0].deregister()
+            self.sources[digest] = (registration, version)
+            self.publications = (self.publications + [publication])[-self.config.retain_versions :]
         await self.refresh()
         return publication
 
@@ -140,6 +163,13 @@ class Publisher:
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        results = await asyncio.gather(
+            *(registration.deregister() for registration, _ in self.sources.values()), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("Origin deregistration failed; its heartbeat will expire: %s", result)
+        self.sources.clear()
         # Let the lease expire rather than deleting a possible replacement's record.
         await asyncio.to_thread(self.origin.shutdown)
         self.directory.cleanup()
@@ -151,8 +181,14 @@ class Publisher:
 async def fetch_publication(publication: Publication, registry, output_dir: Path, transport: str) -> bytes:
     records = (await registry.models(force=True)).get(peer_service(publication.run_id, publication.digest), [])
     random.shuffle(records)
-    candidates = [(r["uri"], r["metadata"]["shardcast_version"]) for r in records]
-    candidates.append((publication.origin, publication.version))
+    # Spread load across peers first; origins participate in the same discovery
+    # protocol. There is deliberately no address fallback outside LiteRegistry.
+    records.sort(key=lambda record: record.get("metadata", {}).get("source_role") == "origin")
+    candidates = [
+        (record["uri"], record["metadata"]["shardcast_version"])
+        for record in records
+        if record.get("uri") and record.get("metadata", {}).get("shardcast_version")
+    ]
     for server, version in candidates:
         client = ClientNode([server], str(output_dir), transport=transport, max_version_bytes=publication.size)
         try:
