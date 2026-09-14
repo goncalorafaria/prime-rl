@@ -159,6 +159,22 @@ class Publisher:
                     return
                 await asyncio.sleep(self.config.poll_seconds)
 
+    async def transfer_metrics(self, publication: Publication) -> dict[str, float]:
+        records = (await self.registry.models(force=True)).get(publication.model_name, [])
+        samples = [
+            r["metadata"]["litecast_transfer"]
+            for r in records
+            if r.get("metadata", {}).get("digest") == publication.digest
+            and "litecast_transfer" in r.get("metadata", {})
+        ]
+        metrics = {"litecast/measured_replicas": float(len(samples))}
+        for field in ("fetch_seconds", "load_seconds"):
+            values = [sample[field] for sample in samples]
+            if values:
+                metrics[f"litecast/{field}_mean"] = sum(values) / len(values)
+                metrics[f"litecast/{field}_max"] = max(values)
+        return metrics
+
     async def close(self):
         if self.task:
             self.task.cancel()

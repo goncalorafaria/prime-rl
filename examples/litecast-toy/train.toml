@@ -1,6 +1,11 @@
 max_steps = 3
 output_dir = "outputs/litecast-toy"
 
+[wandb]
+project = "litecast-toy"
+name = "litecast-toy-a40"
+tags = ["litecast", "qwen3.5-2b", "lora", "a40", "smoke"]
+
 [deployment]
 type = "single_node"
 num_train_gpus = 1

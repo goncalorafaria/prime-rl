@@ -1,5 +1,6 @@
 """PrimeRL pool using the LiteRegistry gateway and independent LiteCast replicas."""
 
+import time
 from pathlib import Path
 
 from prime_rl.litecast.distribution import Publisher
@@ -10,6 +11,7 @@ from prime_rl.utils.client import StaticInferencePool
 class LitecastInferencePool(StaticInferencePool):
     def __init__(self, client_config, model_name, **kwargs):
         super().__init__(client_config, model_name, **kwargs)
+        self.last_transfer_metrics: dict[str, float] = {}
         self.litecast_config = client_config.litecast
         self.publisher = Publisher(self.litecast_config, model_name)
         self.model_name = base_alias(self.litecast_config.run_id)
@@ -48,8 +50,19 @@ class LitecastInferencePool(StaticInferencePool):
     async def update_weights(self, weight_dir: Path | None, lora_name: str | None = None, step: int = 0):
         if weight_dir is None or lora_name is None:
             raise ValueError("LiteCast inference requires filesystem LoRA adapter checkpoints")
+        started = time.perf_counter()
         publication = await self.publisher.publish(weight_dir, step)
+        published = time.perf_counter()
         await self.publisher.wait_ready(publication.model_name, self.litecast_config.update_timeout)
+        ready = time.perf_counter()
+        self.last_transfer_metrics = {
+            "litecast/policy_step": step,
+            "litecast/payload_bytes": publication.size,
+            "litecast/publish_seconds": published - started,
+            "litecast/ready_wait_seconds": ready - published,
+            "litecast/update_seconds": ready - started,
+            **await self.publisher.transfer_metrics(publication),
+        }
         self.model_name = publication.model_name
 
     async def stop(self):

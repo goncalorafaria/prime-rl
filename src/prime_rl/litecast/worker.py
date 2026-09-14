@@ -48,6 +48,7 @@ class Worker:
             max_distribution_folders=args.max_versions,
         )
         self.loaded: dict[str, Path] = {}
+        self.transfer_metrics: dict[str, dict[str, float]] = {}
         self.serving: dict[str, ServerRegistry] = {}
         self.peers: dict[str, tuple[ServerRegistry, str]] = {}
         self.inflight: dict[str, int] = {}
@@ -97,6 +98,7 @@ class Worker:
                 if name in self.serving:
                     await self.serving.pop(name).deregister()
                 shutil.rmtree(self.loaded.pop(name))
+                self.transfer_metrics.pop(name, None)
         keep = {p.model_name for p in publications} | {base_alias(self.args.run_id)}
         for name in list(self.serving):
             if name not in keep:
@@ -106,6 +108,7 @@ class Worker:
                 response = await self.backend.post("/v1/unload_lora_adapter", json={"lora_name": name})
                 response.raise_for_status()
                 shutil.rmtree(self.loaded.pop(name))
+                self.transfer_metrics.pop(name, None)
         self.last_healthy = time.monotonic()
         base = base_alias(self.args.run_id)
         if base not in self.serving:
@@ -122,6 +125,7 @@ class Worker:
                     # response was lost. This name has not been advertised here.
                     response = await self.backend.post("/v1/unload_lora_adapter", json={"lora_name": name})
                     response.raise_for_status()
+                fetch_started = time.perf_counter()
                 payload = await fetch_publication(
                     publication,
                     self.registry,
@@ -129,6 +133,8 @@ class Worker:
                     self.args.transport,
                     source_role="middle" if getattr(self.args, "require_middle", False) else None,
                 )
+                fetch_seconds = time.perf_counter() - fetch_started
+                load_started = time.perf_counter()
                 config, weights = split_adapter(payload)
                 staging = Path(tempfile.mkdtemp(prefix="adapter-", dir=self.root))
                 (staging / "adapter_config.json").write_bytes(config)
@@ -146,6 +152,12 @@ class Worker:
                 except BaseException:
                     shutil.rmtree(staging)
                     raise
+                self.transfer_metrics[name] = {
+                    "fetch_seconds": fetch_seconds,
+                    "load_seconds": time.perf_counter() - load_started,
+                    "payload_bytes": publication.size,
+                }
+                logger.info("LITECAST_TRANSFER model=%s metrics=%s", name, self.transfer_metrics[name])
                 self.loaded[name] = staging
                 version = await blocking(self.origin.broadcast_buffer, payload, self.args.shard_bytes, False)
                 service = peer_service(self.args.run_id, publication.digest)
@@ -163,7 +175,11 @@ class Worker:
                 )
             if name not in self.serving:
                 self.serving[name] = await self.register(
-                    name, self.args.port, step=publication.step, digest=publication.digest
+                    name,
+                    self.args.port,
+                    step=publication.step,
+                    digest=publication.digest,
+                    litecast_transfer=self.transfer_metrics[name],
                 )
         for service, (registration, version) in list(self.peers.items()):
             if version not in self.origin.store:

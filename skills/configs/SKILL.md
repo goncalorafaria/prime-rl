@@ -147,3 +147,13 @@ gateway already handles external request routing.
 The colocated toy trainer/orchestrator uses `[rollout_transport] type="filesystem"`
 to avoid default ZeroMQ port 5555 collisions with unrelated jobs on shared nodes.
 This is separate from the LiteCast weight transport to remote inference.
+
+### LiteCast toy telemetry
+
+The unified toy enables shared `[wandb]` in `examples/litecast-toy/train.toml`.
+Its role launcher must not set `WANDB_MODE=disabled`; the trainer selects online
+mode and a Rex-specific run name. LiteCast update metrics use
+`litecast/policy_step` as their W&B axis and are emitted per successful update.
+Worker fetch/load timings are carried in readiness registration metadata. Check
+`litecast/measured_replicas` before interpreting averages; a missing sample is
+not a zero-duration transfer. End-to-end readiness includes middle propagation.

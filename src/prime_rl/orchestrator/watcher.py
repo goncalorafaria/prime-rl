@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+import wandb
 from modelexpress import p2p_pb2
 
 from prime_rl.configs.orchestrator import OrchestratorConfig
@@ -141,6 +142,14 @@ class WeightWatcher:
             await self.inference.update_weights(weights_path, lora_name=self.lora_name, step=next_step)
             self.last_update_weights_time = time.perf_counter() - t1
             self.update_count += 1
+            if litecast:
+                metrics = self.inference.last_transfer_metrics
+                get_logger().info(f"LiteCast weight update: {metrics}")
+                if self.config.wandb is not None:
+                    wandb.define_metric("litecast/policy_step")
+                    wandb.define_metric("litecast/*", step_metric="litecast/policy_step")
+                    wandb.log(metrics)
+
             get_logger().debug(f"Updated weights to step {next_step} in {format_time(self.last_update_weights_time)}")
 
             if self.lora_name is not None:

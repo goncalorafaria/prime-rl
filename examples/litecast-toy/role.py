@@ -55,7 +55,7 @@ def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     os.chdir(ROOT)
     role = sys.argv[1]
-    os.environ.update(RUN_ID=RUN, ADVERTISE_HOST=HOST, TOKENIZERS_PARALLELISM="false", WANDB_MODE="disabled")
+    os.environ.update(RUN_ID=RUN, ADVERTISE_HOST=HOST, TOKENIZERS_PARALLELISM="false")
     if role == "head":
         redis_port, gateway_port = free_port(), free_port()
         registry = f"redis://{HOST}:{redis_port}/0"
@@ -152,6 +152,8 @@ def main():
             wait(HEAD, f"middle-{rank}", timeout=3600, healthcheck="none")
         config = tomllib.loads((HERE / "train.toml").read_text())
         config["output_dir"] = str(OUTPUT / "training")
+        config["wandb"]["name"] = RUN
+        os.environ["WANDB_MODE"] = "online"
         client = config["orchestrator"]["model"]["client"]
         client["base_url"] = [gateway + "/v1"]
         client["litecast"].update(registry=registry, run_id=RUN, origin_host=HOST, origin_port=free_port())

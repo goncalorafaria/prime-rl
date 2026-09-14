@@ -130,6 +130,12 @@ async def test_publish_gateway_late_join_preemption_and_expiry(tmp_path, monkeyp
             )
             first = await publisher.publish(directory, 1)
             await publisher.wait_ready(first.model_name, 10)
+            metrics = await publisher.transfer_metrics(first)
+            assert metrics["litecast/measured_replicas"] == 1
+            assert metrics["litecast/fetch_seconds_mean"] > 0
+            assert metrics["litecast/load_seconds_mean"] > 0
+            assert metrics["litecast/fetch_seconds_max"] == metrics["litecast/fetch_seconds_mean"]
+            assert worker.transfer_metrics[first.model_name]["payload_bytes"] == first.size
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", timeout=10) as client:
                 response = await client.post("/v1/completions", json={"model": first.model_name, "prompt": "search"})
                 response.raise_for_status()

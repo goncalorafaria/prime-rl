@@ -59,3 +59,26 @@ role stages Qwen3.5-2B revision `15852e8c16360a2fea060d615a32b45270f8a8fc`;
 the trainer also caches the reverse-text dataset. The runtime then uses offline
 Hub access so model/tokenizer initialization does not repeatedly resolve remote
 endpoints. Adapter distribution still requires LiteCast middle sources.
+
+## Transfer timing in W&B
+
+The trainer and orchestrator share an online W&B run in project `litecast-toy`,
+named after the Rex experiment ID. The launch requires configured W&B credentials.
+Each completed weight update logs `litecast/*` against `litecast/policy_step`:
+
+- `publish_seconds`: local adapter packaging, sharding and registry publication.
+- `ready_wait_seconds`: publication to the configured minimum ready replicas,
+  including middle propagation, polling, worker fetch/load and registration.
+- `update_seconds`: the total of those two phases.
+- `fetch_seconds_mean/max`: worker fetch, including registry discovery, candidate
+  retries and integrity verification in the successful fetch call.
+- `load_seconds_mean/max`: unpacking, local staging and vLLM adapter loading.
+- `payload_bytes` and `measured_replicas`: update size and timing sample count.
+
+Worker timings use local monotonic clocks and travel in LiteRegistry metadata;
+LiteRegistry source code is unchanged. Replica statistics cover ready workers at
+update completion, not every later joiner. Missing timing samples are counted as
+zero measured replicas, never reported as zero transfer latency. CPU middleware
+propagation is included in readiness latency, not the worker fetch measurement.
+The worker also writes `LITECAST_TRANSFER` to its log. Metrics are emitted on each
+update rather than only on the periodic dashboard tick, so short runs keep them.
