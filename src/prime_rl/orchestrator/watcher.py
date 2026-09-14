@@ -113,8 +113,8 @@ class WeightWatcher:
             # apply — inference pauses during the update, so nothing can generate
             # under the new number from the old weights, and a ship held on this
             # version releases without waiting out the inference weight reload.
-            shardcast = self.config.model.client.shardcast is not None
-            if not shardcast:
+            litecast = self.config.model.client.litecast is not None
+            if not litecast:
                 self.ckpt_step = next_step
                 self.policy.version = next_step
 
@@ -146,7 +146,7 @@ class WeightWatcher:
             if self.lora_name is not None:
                 self.inference.update_model_name(self.lora_name)
                 self.policy.model_name = self.inference.model_name
-            if shardcast:
+            if litecast:
                 self.ckpt_step = next_step
                 self.policy.version = next_step
 

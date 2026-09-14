@@ -5256,9 +5256,9 @@ gpt-oss = [
 quack = [
     { name = "quack-kernels", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
-shardcast = [
+litecast = [
     { name = "literegistry", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "shardcast", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "litecast", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 
 [package.dev-dependencies]
@@ -5291,7 +5291,7 @@ requires-dist = [
     { name = "flash-linear-attention", git = "https://github.com/fla-org/flash-linear-attention" },
     { name = "jaxtyping", specifier = ">=0.3.2" },
     { name = "kernels", marker = "extra == 'gpt-oss'" },
-    { name = "literegistry", marker = "extra == 'shardcast'", git = "https://github.com/goncalorafaria/literegistry.git?rev=948acd2" },
+    { name = "literegistry", marker = "extra == 'litecast'", git = "https://github.com/goncalorafaria/literegistry.git?rev=948acd2" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "modelexpress", specifier = "==0.3.0" },
     { name = "mooncake-transfer-engine", specifier = ">=0.3.10.post2" },
@@ -5320,7 +5320,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.0.0" },
     { name = "ring-flash-attn", specifier = ">=0.1.8" },
     { name = "setproctitle", specifier = ">=1.3.0" },
-    { name = "shardcast", marker = "extra == 'shardcast'", directory = "packages/shardcast" },
+    { name = "litecast", marker = "extra == 'litecast'", directory = "packages/litecast" },
     { name = "tenacity", specifier = ">=8.2.0" },
     { name = "tilelang", specifier = ">=0.1.8" },
     { name = "torch", specifier = ">=2.9.0", index = "https://download.pytorch.org/whl/cu128" },
@@ -5342,7 +5342,7 @@ requires-dist = [
     { name = "wandb", specifier = ">=0.26.1" },
     { name = "wandb-workspaces", specifier = ">=0.4.3" },
 ]
-provides-extras = ["shardcast", "flash-attn", "flash-attn-3", "flash-attn-cute", "disagg", "gpt-oss", "quack", "all"]
+provides-extras = ["litecast", "flash-attn", "flash-attn-3", "flash-attn-cute", "disagg", "gpt-oss", "quack", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -6597,8 +6597,8 @@ wheels = [
 ]
 
 [[package]]
-name = "shardcast"
-source = { directory = "packages/shardcast" }
+name = "litecast"
+source = { directory = "packages/litecast" }
 dependencies = [
     { name = "blake3", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]

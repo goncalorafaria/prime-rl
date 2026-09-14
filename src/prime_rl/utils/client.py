@@ -208,10 +208,10 @@ async def setup_inference_pool(
     pool_size: int | None = None,
 ) -> InferencePool:
     """Create an inference pool from config (static or elastic)."""
-    if client_config.shardcast is not None:
-        from prime_rl.shardcast.pool import ShardcastInferencePool
+    if client_config.litecast is not None:
+        from prime_rl.litecast.pool import LitecastInferencePool
 
-        return await ShardcastInferencePool.from_config(
+        return await LitecastInferencePool.from_config(
             client_config, model_name=model_name,
             train_client_type=train_client_type, eval_client_type=eval_client_type,
             renderer_config=renderer_config, pool_size=pool_size,

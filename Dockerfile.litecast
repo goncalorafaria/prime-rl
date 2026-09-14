@@ -1,0 +1,16 @@
+# Supply a base image built from this fork's fix/training-top-p revision.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER root
+WORKDIR /app
+COPY src/prime_rl /app/src/prime_rl
+COPY packages/prime-rl-configs /app/packages/prime-rl-configs
+COPY packages/litecast /app/packages/litecast
+COPY examples/litecast-search /app/examples/litecast-search
+# Preserve the base image's validated CUDA/torch/vLLM stack. The package metadata
+# and uv lock also describe the full source-build extra.
+RUN uv pip install --python /app/.venv/bin/python /app/packages/litecast \
+    'literegistry @ git+https://github.com/goncalorafaria/literegistry.git@948acd2'
+ENV PYTHONPATH=/app/src:/app/packages/prime-rl-configs/src
+ENTRYPOINT []
+CMD ["bash", "examples/litecast-search/run-worker.sh"]

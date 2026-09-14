@@ -274,8 +274,8 @@ If you find our work useful, feel free to cite it using
 }
 ```
 
-## ShardCast LoRA inference workers
+## LiteCast LoRA inference workers
 
-See [the 2B search experiment](examples/shardcast-search/README.md) for one-node
+See [the 2B search experiment](examples/litecast-search/README.md) for one-node
 training with independently launched L40/L40S workers, LiteRegistry gateway
 routing, and peer-assisted LoRA distribution.
