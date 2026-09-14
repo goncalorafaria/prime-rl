@@ -85,7 +85,7 @@ tasks:
   - trainer
   resources:
     gpuCount: 1
-    cpuCount: 8
+    cpuCount: 2
     memory: 64 GiB
   datasets:
   - mountPath: /gscratch/ark/graf
@@ -102,6 +102,10 @@ tasks:
     value: 'false'
   - name: REGISTRY_CACHE_TTL_SECONDS
     value: '0'
+  - name: OMP_NUM_THREADS
+    value: '2'
+  - name: MAX_JOBS
+    value: '2'
   result:
     path: /tmp/litecast-result
 - name: inference
@@ -119,7 +123,7 @@ tasks:
   - inference
   resources:
     gpuCount: 1
-    cpuCount: 8
+    cpuCount: 2
     memory: 64 GiB
   datasets:
   - mountPath: /gscratch/ark/graf
@@ -136,6 +140,10 @@ tasks:
     value: 'false'
   - name: REGISTRY_CACHE_TTL_SECONDS
     value: '0'
+  - name: OMP_NUM_THREADS
+    value: '2'
+  - name: MAX_JOBS
+    value: '2'
   result:
     path: /tmp/litecast-result
 rexs:
