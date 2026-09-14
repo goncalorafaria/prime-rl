@@ -17,8 +17,8 @@ tasks:
   - head
   resources:
     gpuCount: 0
-    cpuCount: 2
-    memory: 8 GiB
+    cpuCount: 4
+    memory: 16 GiB
   datasets:
   - mountPath: /gscratch/ark/graf
     source:
@@ -51,8 +51,8 @@ tasks:
   - middle
   resources:
     gpuCount: 0
-    cpuCount: 2
-    memory: 8 GiB
+    cpuCount: 32
+    memory: 128 GiB
   datasets:
   - mountPath: /gscratch/ark/graf
     source:
@@ -85,8 +85,8 @@ tasks:
   - trainer
   resources:
     gpuCount: 1
-    cpuCount: 2
-    memory: 64 GiB
+    cpuCount: 8
+    memory: 96 GiB
   datasets:
   - mountPath: /gscratch/ark/graf
     source:
@@ -103,9 +103,9 @@ tasks:
   - name: REGISTRY_CACHE_TTL_SECONDS
     value: '0'
   - name: OMP_NUM_THREADS
-    value: '2'
+    value: '8'
   - name: MAX_JOBS
-    value: '2'
+    value: '8'
   result:
     path: /tmp/litecast-result
 - name: inference
@@ -123,8 +123,8 @@ tasks:
   - inference
   resources:
     gpuCount: 1
-    cpuCount: 2
-    memory: 64 GiB
+    cpuCount: 8
+    memory: 96 GiB
   datasets:
   - mountPath: /gscratch/ark/graf
     source:
@@ -141,9 +141,9 @@ tasks:
   - name: REGISTRY_CACHE_TTL_SECONDS
     value: '0'
   - name: OMP_NUM_THREADS
-    value: '2'
+    value: '8'
   - name: MAX_JOBS
-    value: '2'
+    value: '8'
   result:
     path: /tmp/litecast-result
 rexs:
@@ -155,7 +155,7 @@ rexs:
   - name: middle
     tasks:
     - middle
-    profile: profile-cpu.yaml
+    profile: profile-middle.yaml
     independent_replicas: true
   - name: trainer
     tasks:

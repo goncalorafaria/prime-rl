@@ -1,7 +1,7 @@
-time_limit: 00:30:00
-cpus_per_task: 2
+time_limit: 01:00:00
+cpus_per_task: 8
 tasks_per_node: 1
-memory: 64G
+memory: 96G
 apptainer_binary: /gscratch/ark/graf/rexs/deploy/klone/apptainer-klone
 image_cache: /tmp/litecast-rexs-images
 image_dir: /gscratch/ark/graf/rexs/deploy/klone/images

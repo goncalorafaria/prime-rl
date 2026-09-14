@@ -82,3 +82,15 @@ zero measured replicas, never reported as zero transfer latency. CPU middleware
 propagation is included in readiness latency, not the worker fetch measurement.
 The worker also writes `LITECAST_TRANSFER` to its log. Metrics are emitted on each
 update rather than only on the periodic dashboard tick, so short runs keep them.
+
+## CPU and memory reservations
+
+The head requests 4 cores / 16 GiB. Each middle requests 32 cores / 128 GiB
+on an exclusive CPU host; independent allocations plus node exclusivity prevent
+the two middles from sharing a host. The site-specific middle profile excludes
+the GPU hosts in Klone's checkpoint partition. Refresh that list if the cluster
+inventory changes. Exclusive scheduling reserves the host's CPUs; the middle
+process receives its requested 32-core task allocation and 128 GiB memory limit.
+Trainer and inference each request one A40, 8 CPU cores and 96 GiB, with a
+one-hour limit for startup and the short training smoke. They may share a GPU
+host with separate reserved resources. These requests can wait longer in queue.
