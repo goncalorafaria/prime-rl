@@ -637,6 +637,18 @@ class OrchestratorConfig(BaseConfig):
         return any(env.algo is not None and env.algo.sampling.source == "policy" for env in self.train.source)
 
     @model_validator(mode="after")
+    def validate_shardcast_pool(self):
+        pool = self.model.client.shardcast
+        if pool is not None:
+            if self.model.lora is None or self.weight_broadcast.type != "filesystem":
+                raise ValueError("ShardCast requires LoRA and local filesystem trainer/orchestrator handoff")
+            if pool.retain_versions < self.max_off_policy_steps + 2:
+                raise ValueError("retain_versions must be at least max_off_policy_steps + 2")
+            if self.collect_inference_metrics:
+                raise ValueError("collect_inference_metrics must be false for the LiteRegistry gateway pool")
+        return self
+
+    @model_validator(mode="after")
     def validate_pool_size(self):
         """``pool_size`` sizes the renderer-client pool for policy-sourced
         sampling. Reject it when that path never runs — no train env samples

@@ -381,7 +381,7 @@ class Orchestrator:
                 )
             if self.lora_name is not None:
                 self.policy_inference.update_model_name(self.lora_name)
-                self.policy.model_name = self.lora_name
+                self.policy.model_name = self.policy_inference.model_name
             self.policy.version = sync_version
 
         self.train_source = TrainSource(self.train_envs, seed=42)

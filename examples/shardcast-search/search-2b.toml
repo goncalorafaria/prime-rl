@@ -1,0 +1,126 @@
+# One training node; inference workers are launched independently.
+max_steps = 3
+output_dir = "outputs/shardcast-search-2b"
+
+[deployment]
+type = "single_node"
+num_train_gpus = 1
+num_infer_gpus = 0
+
+[model]
+name = "Qwen/Qwen3.5-2B"
+
+[trainer]
+enable_token_export = true
+
+[trainer.model]
+seq_len = 32768
+attn = "auto"
+impl = "auto"
+
+[trainer.model.ac]
+mode = "full"
+freq = 1
+
+[trainer.model.lora]
+rank = 8
+alpha = 16
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.loss]
+type = "default"
+aggregation = "group_token_mean"
+kl_tau = 0.0
+
+[trainer.optim]
+type = "adamw"
+lr = 1e-5
+max_norm = 1.0
+weight_decay = 0.0
+eps = 1e-12
+betas1 = 0.95
+betas2 = 0.95
+
+[orchestrator]
+batch_size = 8
+group_size = 2
+seq_len = 8192
+max_off_policy_steps = 2
+oversampling_factor = 2.0
+max_inflight_episodes = 16
+collect_inference_metrics = false
+
+[orchestrator.model.lora]
+name = "search-2b"
+rank = 8
+alpha = 16
+
+[orchestrator.model.client]
+base_url = ["http://registry-host:1212/v1"]
+
+[orchestrator.model.client.shardcast]
+registry = "redis://registry-host:6379/0"
+run_id = "search-2b-smoke"
+origin_host = "trainer-host"
+origin_port = 8201
+min_replicas = 1
+retain_versions = 8
+transport = "http"
+
+[orchestrator.train.sampling]
+max_completion_tokens = 2048
+temperature = 1.0
+top_p = 0.97
+
+[orchestrator.train.sampling.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[[orchestrator.train.source]]
+name = "bc-rl-v1-webterminal-train"
+
+[orchestrator.train.source.legacy]
+id = "primebeaker.environments.jtc_search_agent_webterminal_judge_env"
+
+[orchestrator.train.source.legacy.args]
+dataset = "graf/bc-rl-v1.1-search-agent"
+split = "train"
+search_server_url = "http://registry-host:1212/search"
+terminal_server_url = "http://registry-host:1212/terminal"
+local_search_model_path = "localsearch:bc-rl-v1"
+template_path = "templates/search-agent-webterminal-10k.json"
+terminal_truncation = 10000
+webterminal_max_content_length = 64000
+judge_model_path = "/weka/gfaria/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400"
+judge_server_url = "http://registry-host:1212/judge"
+judge_service_model_path = "judge"
+judge_timeout = 240
+judge_max_retries = 3
+judge_rubric_template = "The final answer the model concluded is: {answer}"
+validate_judge_profile = true
+timeout = 65
+max_retries = 3
+max_tool_calls = 10
+max_turns = 11
+tool_stderr_penalty = 0.05
+missing_final_answer_penalty = -1.0
+token_budget_warning_fraction = 0.1
+turn_budget_warning_fraction = 0.1
+
+[orchestrator.train.source.legacy.extra_env_kwargs]
+max_total_completion_tokens = 8192
+
+[orchestrator.renderer]
+name = "qwen3.5"
+enable_thinking = true
+thinking_retention = "tool_cycle"
+
+[weight_broadcast]
+type = "filesystem"
+
+[ckpt]
+interval = 1
+keep_last = 3
+
+[log]
+level = "info"

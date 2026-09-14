@@ -119,6 +119,33 @@ class ElasticConfig(BaseConfig):
     """Seconds between server discovery checks."""
 
 
+class ShardcastPoolConfig(BaseConfig):
+    registry: str
+    """LiteRegistry URI shared by the publisher and inference replicas."""
+
+    run_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,80}$")
+    """Unique experiment namespace; never share across concurrent trainers."""
+
+    origin_host: str
+    """Training-node hostname reachable from every inference replica."""
+
+    origin_port: int = Field(8201, ge=1, le=65535)
+    min_replicas: int = Field(1, ge=1)
+    retain_versions: int = Field(8, ge=2)
+    max_adapter_bytes: int = Field(512 * 1024 * 1024, gt=16)
+    shard_bytes: int = Field(8 * 1024 * 1024, gt=0)
+    poll_seconds: float = Field(2, gt=0)
+    lease_seconds: float = Field(30, gt=0)
+    update_timeout: float = Field(600, gt=0)
+    transport: Literal["http", "auto", "ucxx"] = "http"
+
+    @model_validator(mode="after")
+    def validate_lease(self):
+        if self.lease_seconds <= 2 * self.poll_seconds:
+            raise ValueError("lease_seconds must exceed twice poll_seconds")
+        return self
+
+
 class ClientConfig(BaseConfig):
     wait_for_ready_timeout: int = 1800
     """Seconds to wait at startup for the inference pool to become ready. Applies to both the static health check and elastic DNS-based discovery."""
@@ -144,11 +171,20 @@ class ClientConfig(BaseConfig):
     admin_base_url: list[str] | None = None
     """Separate base URLs for admin operations (weight updates, health checks). When set, admin clients bypass routers and hit each server directly — used in disaggregated P/D deployments where the router must not handle admin traffic."""
 
+    shardcast: ShardcastPoolConfig | None = None
+    """LoRA distribution to independent LiteRegistry inference replicas. base_url points to the gateway."""
+
     elastic: ElasticConfig | None = None
     """Elastic inference pool config for DNS-based service discovery. When set, ``base_url`` is ignored and inference servers are discovered dynamically via DNS."""
 
     router_url: str | None = None
     """vllm-router URL for load-aware inference routing. With elastic mode, inference requests go through the router while admin ops still hit discovered pods directly."""
+
+    @model_validator(mode="after")
+    def validate_shardcast(self):
+        if self.shardcast is not None and (self.elastic is not None or self.router_url or self.admin_base_url):
+            raise ValueError("ShardCast uses base_url for the LiteRegistry gateway; DNS elastic/admin/router overrides are incompatible")
+        return self
 
     @property
     def is_elastic(self) -> bool:

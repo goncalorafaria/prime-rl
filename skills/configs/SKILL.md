@@ -108,3 +108,19 @@ Set `top_p` directly under `[orchestrator.train.sampling]`, for example
 `top_p = 0.97`. The valid range is `(0, 1]`; the default is `1.0`.
 Do not put `top_p` in `sampling.extra_body`: renderer clients prioritize the
 explicit sampling fields. Configuration validation rejects that placement.
+
+## ShardCast inference replicas
+
+For externally launched preemptible LoRA workers, configure
+`orchestrator.model.client.shardcast` and point `model.client.base_url` to the
+LiteRegistry/PrimeBeaker gateway. Keep the trainer/orchestrator local handoff
+as `weight_broadcast.type="filesystem"`; omit the local `inference` section
+and set `deployment.num_infer_gpus=0`. Use LoRA, disable direct engine metrics,
+and retain at least `max_off_policy_steps + 2` adapter versions. The example
+and separate worker command are in `examples/shardcast-search/README.md`.
+
+The pinned CLI rejects numeric source-list overrides such as
+`--orchestrator.train.source.0.legacy.args.search_server_url`. For the ShardCast
+launcher, materialize those addresses in TOML with
+`uv run python -m prime_rl.shardcast.launch --write-config /tmp/search.toml`
+instead; it preserves the source as an array of tables.
