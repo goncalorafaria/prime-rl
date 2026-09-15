@@ -1,0 +1,5 @@
+[
+  {"run_id": "trainer-a", "base_model": "Qwen/Qwen3.5-2B", "backend_url": "http://127.0.0.1:8000", "shard_port": 8201},
+  {"run_id": "trainer-b", "base_model": "Qwen/Qwen3.5-2B", "backend_url": "http://127.0.0.1:8000", "shard_port": 8202},
+  {"run_id": "trainer-c", "base_model": "Qwen/Qwen3-0.6B", "backend_url": "http://127.0.0.1:9000", "shard_port": 8203}
+]

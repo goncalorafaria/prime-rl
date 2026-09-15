@@ -118,3 +118,14 @@ Validate that native token route end to end through both gateway and sidecar,
 including queue limits and cancellation, before launching training. Its request
 uses `model`, `token_ids` and `sampling_params`; preserve token IDs/logprobs in
 the response and select the exact immutable policy version.
+
+### LiteCast shared inference for multiple trainers
+
+Use `prime_rl.litecast.worker --tenants PATH` with the explicit subscription list
+in `examples/litecast-multitenant/tenants.json`. Each run has a unique run ID and
+shard port. Same-base trainers may share a backend; different base models require
+separate inference engines and backend URLs. The sidecar does not launch engines.
+Size backend LoRA CPU slots for the sum of retained versions across its tenants.
+Keep one sidecar pool per backend so adapter ownership and admission are shared.
+Middle processes still subscribe per run. See the adjacent README for readiness,
+capacity, trusted-network scope, and startup-only subscription behavior.

@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
+from copy import copy
 from pathlib import Path
 from uuid import uuid4
 
@@ -214,7 +215,7 @@ class Worker:
                 # Preemption, registry outage and an incomplete download are
                 # retryable; do not advertise a worker whose health is unknown.
                 self.last_healthy = float("-inf")
-                logger.exception("Replica reconciliation failed; retrying")
+                logger.exception("Replica reconciliation failed run_id=%s; retrying", self.args.run_id)
                 try:
                     await self.withdraw()
                 except Exception:
@@ -240,7 +241,92 @@ class Worker:
             shutil.rmtree(self.root)
 
 
-def create_app(worker: Worker):
+class TenantPool:
+    """Explicit trainer subscriptions sharing one admission budget and HTTP endpoint."""
+
+    def __init__(self, workers):
+        if not workers or len({w.args.run_id for w in workers}) != len(workers):
+            raise ValueError("tenant run IDs must be nonempty and unique")
+        backends = {}
+        for worker in workers:
+            url = worker.args.backend_url.rstrip("/")
+            if url in backends and backends[url] != worker.args.base_model:
+                raise ValueError("different base models require different backend URLs")
+            backends[url] = worker.args.base_model
+        self.workers = workers
+        self.max_inflight_requests = workers[0].max_inflight_requests
+        self.inflight = {}
+        self.replica_id = uuid4().hex
+        self.task = None
+        for worker in workers:
+            worker.inflight = self.inflight
+            worker.replica_id = self.replica_id
+            worker.max_inflight_requests = self.max_inflight_requests
+
+    @property
+    def serving(self):
+        return {name: registration for worker in self.workers for name, registration in worker.serving.items()}
+
+    def owner(self, name):
+        return next((worker for worker in self.workers if worker.available(name)), None)
+
+    def available(self, name):
+        return self.owner(name) is not None
+
+    async def run(self):
+        await asyncio.gather(*(worker.run() for worker in self.workers))
+
+    async def close(self):
+        if self.task:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
+        results = await asyncio.gather(*(worker.close() for worker in self.workers), return_exceptions=True)
+        errors = [result for result in results if isinstance(result, Exception)]
+        if errors:
+            raise ExceptionGroup("tenant cleanup failed", errors)
+
+
+def tenant_args(args):
+    """Validate all subscriptions before starting any shard servers."""
+    if not args.tenants:
+        if not args.run_id or not args.base_model:
+            raise ValueError("provide --run-id and --base-model, or --tenants")
+        return [args]
+    if args.run_id or args.base_model:
+        raise ValueError("--tenants cannot be combined with --run-id or --base-model")
+    items = json.loads(args.tenants.read_text())
+    if not isinstance(items, list) or not items:
+        raise ValueError("tenants must be a nonempty JSON list")
+    subscriptions = []
+    runs, ports, backends = set(), set(), {}
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {"run_id", "base_model", "backend_url", "shard_port"}:
+            raise ValueError("each tenant requires run_id, base_model, backend_url, shard_port")
+        validate_run_id(item["run_id"])
+        if not isinstance(item["base_model"], str) or not item["base_model"]:
+            raise ValueError("tenant base_model must be nonempty")
+        url = item["backend_url"]
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ValueError("tenant backend_url must be an HTTP URL")
+        url = url.rstrip("/")
+        port = item["shard_port"]
+        if type(port) is not int or not 1 <= port <= 65535 or port == args.port or port in ports:
+            raise ValueError("tenant shard ports must be valid, unique and different from the serving port")
+        if item["run_id"] in runs:
+            raise ValueError("tenant run IDs must be unique")
+        if url in backends and backends[url] != item["base_model"]:
+            raise ValueError("different base models require different backend URLs")
+        runs.add(item["run_id"])
+        ports.add(port)
+        backends[url] = item["base_model"]
+        subscription = copy(args)
+        for key, value in item.items():
+            setattr(subscription, key, value)
+        subscriptions.append(subscription)
+    return subscriptions
+
+
+def create_app(worker: Worker | TenantPool):
     @asynccontextmanager
     async def lifespan(app):
         worker.task = asyncio.create_task(worker.run())
@@ -253,7 +339,7 @@ def create_app(worker: Worker):
 
     @app.get("/health")
     async def health():
-        if not worker.available(base_alias(worker.args.run_id)):
+        if not any(worker.available(name) for name in worker.serving):
             raise HTTPException(503, "replica is not ready")
         return {"status": "ready", "models": list(worker.serving)}
 
@@ -269,7 +355,10 @@ def create_app(worker: Worker):
             raise HTTPException(404)
         payload = await request.json()
         name = payload.get("model")
-        if not isinstance(name, str) or not worker.available(name):
+        owner = None
+        if isinstance(name, str):
+            owner = worker.owner(name) if isinstance(worker, TenantPool) else worker if worker.available(name) else None
+        if owner is None:
             raise HTTPException(
                 503,
                 "requested policy version is not ready on this replica",
@@ -279,12 +368,12 @@ def create_app(worker: Worker):
             raise HTTPException(
                 429, "replica capacity exhausted", headers={"x-litecast-admission-rejected": "1", "Retry-After": "1"}
             )
-        if name == base_alias(worker.args.run_id):
-            payload["model"] = worker.args.base_model
+        if name == base_alias(owner.args.run_id):
+            payload["model"] = owner.args.base_model
         worker.inflight[name] = worker.inflight.get(name, 0) + 1
         try:
-            upstream = await worker.backend.send(
-                worker.backend.build_request("POST", endpoint, json=payload),
+            upstream = await owner.backend.send(
+                owner.backend.build_request("POST", endpoint, json=payload),
                 stream=True,
             )
         except BaseException:
@@ -318,8 +407,9 @@ def create_app(worker: Worker):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", default=os.getenv("REGISTRY"), required=not os.getenv("REGISTRY"))
-    parser.add_argument("--run-id", required=True)
-    parser.add_argument("--base-model", required=True)
+    parser.add_argument("--run-id")
+    parser.add_argument("--tenants", type=Path, help="JSON trainer subscriptions; replaces run-id/base-model")
+    parser.add_argument("--base-model")
     parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
     parser.add_argument("--advertise-host", required=True)
     parser.add_argument("--port", type=int, default=8100)
@@ -349,9 +439,15 @@ def main():
         parser.error("sizes, limits, and intervals must be positive")
     if args.lease_seconds <= 2 * args.poll_seconds:
         parser.error("lease-seconds must exceed twice poll-seconds")
+    try:
+        subscriptions = tenant_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(create_app(Worker(args)), host="0.0.0.0", port=args.port)
+    workers = [Worker(subscription) for subscription in subscriptions]
+    worker = TenantPool(workers) if args.tenants else workers[0]
+    uvicorn.run(create_app(worker), host="0.0.0.0", port=args.port)
 
 
 if __name__ == "__main__":

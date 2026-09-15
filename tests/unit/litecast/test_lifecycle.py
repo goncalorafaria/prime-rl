@@ -41,7 +41,7 @@ async def serve(app, port):
         await asyncio.wait_for(task, 15)
 
 
-def engine():
+def engine(base_model="test-2b"):
     app = FastAPI()
     adapters = {}
 
@@ -51,7 +51,7 @@ def engine():
 
     @app.get("/v1/models")
     async def models():
-        return {"data": [{"id": name} for name in ["test-2b", *adapters]]}
+        return {"data": [{"id": name} for name in [base_model, *adapters]]}
 
     @app.post("/v1/load_lora_adapter")
     async def load(request: Request):
@@ -157,7 +157,7 @@ async def test_publish_gateway_late_join_preemption_and_expiry(tmp_path, monkeyp
             late_worker = make_worker(late_backend)
             async with serve(engine(), late_backend), serve(create_app(late_worker), late_worker.args.port):
                 async with asyncio.timeout(10):
-                    while second.model_name not in late_worker.serving:
+                    while not all(p.model_name in late_worker.serving for p in (first, second)):
                         await asyncio.sleep(0.05)
                 assert first.model_name in late_worker.loaded
                 # Simulate loss of the original replica's advertisement.
@@ -319,3 +319,96 @@ async def test_weight_sources_require_registry_discovery(tmp_path):
         assert peer_service(config.run_id, second.digest) in models
     finally:
         await publisher.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared_backend", [True, False])
+async def test_tenant_pool_isolates_updates_and_failure(tmp_path, shared_backend):
+    from contextlib import AsyncExitStack
+
+    from prime_rl.litecast.worker import TenantPool
+
+    registry = f"file://{tmp_path / 'registry'}"
+    port = free_port()
+    publishers, workers = [], []
+    async with AsyncExitStack() as stack:
+        backend = free_port()
+        await stack.enter_async_context(serve(engine(), backend))
+        for index in range(2):
+            base_model = "other-base" if index and not shared_backend else "test-2b"
+            if index and not shared_backend:
+                backend = free_port()
+                await stack.enter_async_context(serve(engine(base_model), backend))
+            config = SimpleNamespace(
+                registry=registry,
+                run_id=f"tenant-{index}",
+                origin_host="127.0.0.1",
+                origin_port=free_port(),
+                transport="http",
+                max_adapter_bytes=1048576,
+                retain_versions=2,
+                poll_seconds=0.05,
+                lease_seconds=2,
+                shard_bytes=64,
+                min_replicas=1,
+            )
+            publisher = Publisher(config, base_model)
+            await publisher.start()
+            stack.push_async_callback(publisher.close)
+            publishers.append(publisher)
+            workers.append(
+                Worker(
+                    SimpleNamespace(
+                        registry=registry,
+                        run_id=config.run_id,
+                        base_model=base_model,
+                        backend_url=f"http://127.0.0.1:{backend}",
+                        cache_dir=tmp_path,
+                        max_versions=2,
+                        max_adapter_bytes=1048576,
+                        shard_bytes=64,
+                        transport="http",
+                        advertise_host="127.0.0.1",
+                        port=port,
+                        shard_port=free_port(),
+                        poll_seconds=0.05,
+                        lease_seconds=2,
+                        request_timeout=5,
+                        max_inflight_requests=1,
+                    )
+                )
+            )
+        pool = TenantPool(workers)
+        await stack.enter_async_context(serve(create_app(pool), port))
+        publications = []
+        for index, publisher in enumerate(publishers):
+            directory = tmp_path / f"adapter-{index}"
+            directory.mkdir()
+            (directory / "adapter_config.json").write_text('{"peft_type":"LORA","r":8}')
+            save_file(
+                {"lora_A.weight": np.array([index + 1.0], dtype=np.float32)},
+                str(directory / "adapter_model.safetensors"),
+            )
+            publication = await publisher.publish(directory, 1)
+            await publisher.wait_ready(publication.model_name, 10)
+            publications.append(publication)
+        assert workers[0].replica_id == workers[1].replica_id
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            for index, publication in enumerate(publications):
+                response = await client.post("/v1/completions", json={"model": publication.model_name})
+                assert response.status_code == 200
+                assert response.json()["choices"][0]["text"] == str(index + 1.0)
+            pool.inflight[publications[0].model_name] = 1
+            response = await client.post("/v1/completions", json={"model": publications[1].model_name})
+            assert response.status_code == 429
+            pool.inflight.clear()
+            publishers[0].task.cancel()
+            await asyncio.gather(publishers[0].task, return_exceptions=True)
+            await publishers[0].store.delete(desired_key("tenant-0"))
+            async with asyncio.timeout(10):
+                while pool.available(publications[0].model_name):
+                    await asyncio.sleep(0.05)
+            response = await client.post("/v1/completions", json={"model": publications[0].model_name})
+            assert response.status_code == 503
+            response = await client.post("/v1/completions", json={"model": publications[1].model_name})
+            assert response.status_code == 200
