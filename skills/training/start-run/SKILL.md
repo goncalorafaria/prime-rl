@@ -92,3 +92,23 @@ curl http://localhost:8000/v1/chat/completions \
 - `packages/prime-rl-configs/src/prime_rl/configs/` — all config classes
 - `configs/debug/` — minimal debug configs
 - `examples/` — full example configs (e.g. `reverse-text/`)
+
+## LiteCast Rex container preflight
+
+Run `examples/litecast-toy/preflight.py` using the training runtime inside the
+actual clean Apptainer environment before loading models. Host W&B authentication
+does not establish container authentication: fakeroot can change HOME. Set NETRC
+to the mounted credentials file (or supply WANDB_API_KEY securely); never embed
+the key in the experiment YAML or logs. The toy trainer checks this automatically
+with a bounded subprocess timeout, so authentication failures fail its allocation.
+
+For the LiteCast toy, run `sbatch examples/litecast-toy/build-runtime.sbatch` before
+Rex submission. Task commands stage this immutable archive locally and relocate
+Python/console entrypoints. Use a new archive path when dependencies change;
+local source remains editable on shared storage. Check RUNTIME_CACHE_HIT/MISS
+timing in role logs before attributing startup delays to model downloads.
+
+Runtime copying, compression, compilation and heavy import benchmarks must run
+on a Slurm compute allocation, never on the login node. The build script requests
+16 CPU cores and 64 GB and checks the resulting cache inside the training image.
+Wait for that job to succeed before submitting the training experiment.

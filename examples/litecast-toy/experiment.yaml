@@ -7,13 +7,8 @@ tasks:
   image:
     beaker: litecast-runtime
   command:
-  - uv
-  - run
-  - --no-project
-  - --python
-  - /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host/bin/python
-  - python
-  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/role.py
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
   - head
   resources:
     gpuCount: 0
@@ -43,13 +38,8 @@ tasks:
   image:
     beaker: litecast-runtime
   command:
-  - uv
-  - run
-  - --no-project
-  - --python
-  - /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host/bin/python
-  - python
-  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/role.py
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
   - middle
   resources:
     gpuCount: 0
@@ -77,13 +67,8 @@ tasks:
   image:
     beaker: litecast-runtime
   command:
-  - uv
-  - run
-  - --no-project
-  - --python
-  - /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host/bin/python
-  - python
-  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/role.py
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
   - trainer
   resources:
     gpuCount: 1
@@ -94,6 +79,8 @@ tasks:
     source:
       hostPath: /gscratch/ark/graf
   envVars:
+  - name: NETRC
+    value: /gscratch/ark/graf/.netrc
   - name: UV_PROJECT_ENVIRONMENT
     value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
   - name: PYTHONPATH
@@ -115,13 +102,8 @@ tasks:
   image:
     beaker: litecast-runtime
   command:
-  - uv
-  - run
-  - --no-project
-  - --python
-  - /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host/bin/python
-  - python
-  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/role.py
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
   - inference
   resources:
     gpuCount: 1

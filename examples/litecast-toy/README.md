@@ -19,9 +19,10 @@ the login host's glibc is too old for the pinned Mooncake wheel. Always execute
 the training environment inside the image. The existing training environment
 and live evaluations are not modified.
 
-Validate before submitting:
+Build the runtime archive once, then validate before submitting:
 
 ```bash
+sbatch examples/litecast-toy/build-runtime.sbatch
 rexs validate examples/litecast-toy/experiment.yaml --strict
 rexs submit examples/litecast-toy/experiment.yaml --strict --name litecast-toy
 ```
@@ -191,8 +192,7 @@ length, completions, overflow/timeouts and worker admission rejections. These ar
 process-local counters and reset on gateway replacement. Replica slots count
 HTTP requests, not tokens, so tune the limit for the model and sequence lengths.
 Deploy the PrimeRL gateway and updated sidecars together; workers without capacity
-metadata are not eligible for this routing policy. The current running experiment
-has not been restarted to install this change.
+metadata are not eligible for this routing policy.
 
 Middle supervisors log `MIDDLE_STARTED`, then `MIDDLE_STATUS` on state changes
 and every 30 seconds. The status distinguishes waiting for a publisher, waiting
@@ -200,3 +200,30 @@ for weights/origin, syncing, and ready; it includes published/cache counts and
 whether the LiteCast server has actually started. The server is created lazily
 when an origin is discovered, so no library transfer logs are expected before
 publication. `MIDDLE_READY` remains the per-adapter verified-cache event.
+
+## Runtime cache and authentication
+
+Before submitting, build the runtime archive once with
+`sbatch examples/litecast-toy/build-runtime.sbatch`. The archive contains the
+installed environment and its base Python; a small decompressor is copied beside
+it because the training image does not include zstd. Each role verifies and unpacks it into
+node-local storage under `/tmp/litecast-runtime-graf`, protected by a lock and
+atomic completion. Console entrypoints and Python paths are relocated. Subsequent
+roles/restarts on the same host reuse the extracted runtime. Source remains in the
+shared checkout, so dependency changes require a new archive, while source edits
+do not. Set `LITECAST_RUNTIME_ARCHIVE` consistently for the build and all tasks
+when replacing dependencies; never overwrite an existing archive.
+
+`RUNTIME_CACHE_MISS` / `RUNTIME_CACHE_HIT` log staging time. New hosts or cleaned
+local storage still require extraction; scheduler and GPU initialization time are
+not cached. Model downloads already use the persistent per-node Hugging Face cache.
+
+The trainer sets `NETRC` to the mounted host credentials file. Its bounded W&B
+preflight runs inside the container before model startup and must authenticate
+online. No API key is stored in this repository or the experiment specification.
+A host-side login check is insufficient when the container changes HOME.
+
+Runtime copying, compression, compilation and heavy import benchmarks must run
+on a Slurm compute allocation, never on the login node. The build script requests
+16 CPU cores and 64 GB and checks the resulting cache inside the training image.
+Wait for that job to succeed before submitting the training experiment.

@@ -75,6 +75,12 @@ def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     os.chdir(ROOT)
     role = sys.argv[1]
+    if role == "trainer":
+        subprocess.run(
+            ["uv", "run", "--no-project", "--python", sys.executable, "python", str(HERE / "preflight.py")],
+            check=True,
+            timeout=120,
+        )
     if role in ("trainer", "inference"):
         validate_lora_config()
     os.environ.update(RUN_ID=RUN, ADVERTISE_HOST=HOST, TOKENIZERS_PARALLELISM="false")
