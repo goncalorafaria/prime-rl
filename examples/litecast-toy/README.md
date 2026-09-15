@@ -313,3 +313,8 @@ Long-run middle profiles reserve 16 CPUs and 64 GB each without requesting an
 exclusive whole host. Slurm keeps those CPUs unshared on this partition. This
 avoids waiting for an entirely idle CPU node while preserving the requested
 resources. The current run places its two middle replicas on separate hosts.
+
+The runtime launcher removes only the fakeroot library from child-process
+`LD_PRELOAD` after staging. Hundreds of concurrent SDK imports otherwise contend
+on fakeroot's metadata semaphore. Other preload libraries are preserved; image
+setup still uses the site wrapper. Existing running processes are unaffected.

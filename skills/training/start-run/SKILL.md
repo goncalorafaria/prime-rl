@@ -169,3 +169,9 @@ replacing pending allocations for placement, hold the Rex experiment lock, verif
 the scheduler still reports PENDING, preserve script hashes/state, and exclude
 the other middle's host to keep the pair separate. Never cancel a running
 allocation under a pending-only placement change.
+
+For large subprocess rollout concurrency, remove the fakeroot preload from
+runtime child processes after container setup; it serializes metadata operations
+and can make concurrent SDK imports take minutes. Preserve other LD_PRELOAD
+libraries. Validate import behavior on Slurm. Do not restart a productive run
+solely to pick up this startup optimization.

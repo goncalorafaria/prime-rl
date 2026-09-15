@@ -81,6 +81,22 @@ exec 9>&-
 export UV_PROJECT_ENVIRONMENT=$local_root/runtime
 export PATH=$local_root/runtime/bin:$PATH
 source "$here/model-cache.sh"
+# Runtime children do not need package-installation ownership emulation.
+IFS=': ' read -r -a preload_libraries <<< "${LD_PRELOAD:-}"
+runtime_preloads=()
+removed_fakeroot=false
+for library in "${preload_libraries[@]}"; do
+    if [[ $library == *libfakeroot* ]]; then
+        removed_fakeroot=true
+    elif [[ -n $library ]]; then
+        runtime_preloads+=("$library")
+    fi
+done
+if [[ $removed_fakeroot == true ]]; then
+    export LD_PRELOAD="$(IFS=:; echo "${runtime_preloads[*]}")"
+    unset FAKEROOTKEY
+    echo "RUNTIME_FAKEROOT_PRELOAD_REMOVED"
+fi
 if [[ ${1:-} == check ]]; then
     shift
     exec uv run --no-project --python "$local_root/runtime/bin/python" python "$@"
