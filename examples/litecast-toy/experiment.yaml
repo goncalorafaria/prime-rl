@@ -34,6 +34,8 @@ tasks:
     value: 'false'
   - name: REGISTRY_CACHE_TTL_SECONDS
     value: '0'
+  - name: LITECAST_CAPACITY_ENABLED
+    value: '1'
   result:
     path: /tmp/litecast-result
 - name: middle
@@ -144,6 +146,8 @@ tasks:
     value: '8'
   - name: MAX_JOBS
     value: '8'
+  - name: LITECAST_CAPACITY_ENABLED
+    value: '1'
   result:
     path: /tmp/litecast-result
 rexs:

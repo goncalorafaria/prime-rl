@@ -160,3 +160,36 @@ GPU roles materialize the model name as the downloaded local snapshot path befor
 enabling offline Hub access. This avoids an unpinned `main` lookup in the RL
 launcher's pre-download step. Every role uses the same pinned revision and cache
 layout; base-model identity checks reject a mismatched worker path.
+
+## Per-replica request capacity
+
+New submissions set `LITECAST_CAPACITY_ENABLED=1` on head and inference tasks.
+The head then starts `prime_rl.litecast.gateway:create_app`, which uses LiteRegistry's
+routing extension API. All implementation lives in the PrimeRL fork. The settings
+in `capacity.toml` allow 2 active HTTP generation requests per replica, 64 waiting
+requests at the gateway, and up to 120 seconds waiting for admission. The existing
+orchestrator episode limit remains an additional global bound.
+
+A worker advertises its process identity and request capacity with every ready
+model name. The gateway shares one active counter across all versions on that
+worker, admits only an exact-model match with a free slot, and chooses among
+available replicas by relative occupancy. Waiting requests discover new replicas
+within the configured polling interval. Queues are FIFO per model version;
+different versions can progress independently. A slot is held through the entire
+response, including streaming. Client disconnects cancel queued work and release
+active slots. Queue overflow returns 429; admission timeout returns 503.
+
+Workers enforce the same limit locally before contacting vLLM. This remains the
+hard bound across gateway processes, gateway restarts, and direct callers.
+A capacity rejection causes the gateway to release its reservation and requeue
+with a short cooldown. Only pre-admission rejection and connection-establishment
+failure are automatically retried; a failure after dispatch is not silently
+replayed by this policy. No retry changes the requested policy version.
+
+`GET /litecast/capacity` on the gateway exposes active requests by replica, queue
+length, completions, overflow/timeouts and worker admission rejections. These are
+process-local counters and reset on gateway replacement. Replica slots count
+HTTP requests, not tokens, so tune the limit for the model and sequence lengths.
+Deploy the PrimeRL gateway and updated sidecars together; workers without capacity
+metadata are not eligible for this routing policy. The current running experiment
+has not been restarted to install this change.

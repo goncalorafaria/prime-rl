@@ -82,6 +82,7 @@ def main():
         redis_port, gateway_port = free_port(), free_port()
         registry = f"redis://{HOST}:{redis_port}/0"
         os.environ["REGISTRY_PATH"] = registry
+        os.environ["LITECAST_CAPACITY_CONFIG"] = str(HERE / "capacity.toml")
         os.environ["REGISTRY"] = registry
         redis_directory = OUTPUT / "redis"
         redis_directory.mkdir(exist_ok=True)
@@ -110,7 +111,9 @@ def main():
         python(
             "-m",
             "uvicorn",
-            "literegistry.gateway:create_app",
+            "prime_rl.litecast.gateway:create_app"
+            if os.getenv("LITECAST_CAPACITY_ENABLED") == "1"
+            else "literegistry.gateway:create_app",
             "--factory",
             "--host",
             "0.0.0.0",
@@ -203,6 +206,10 @@ def main():
             "--shard-port",
             str(shards),
             "--require-middle",
+            "--max-inflight-requests",
+            str(tomllib.loads((HERE / "capacity.toml").read_text())["max_inflight_per_replica"])
+            if os.getenv("LITECAST_CAPACITY_ENABLED") == "1"
+            else "4",
         )
         watch({})
     elif role == "trainer":

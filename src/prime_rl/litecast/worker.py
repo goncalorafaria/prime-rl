@@ -10,11 +10,11 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from literegistry import RegistryClient, get_kvstore
 from literegistry.registry import ServerRegistry
 
@@ -28,6 +28,7 @@ from prime_rl.litecast.protocol import (
     split_adapter,
     validate_run_id,
 )
+from prime_rl.litecast.responses import ManagedStreamingResponse
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,10 @@ logger = logging.getLogger(__name__)
 class Worker:
     def __init__(self, args):
         self.args = args
+        self.replica_id = uuid4().hex
+        self.max_inflight_requests = getattr(args, "max_inflight_requests", 4)
+        if self.max_inflight_requests < 1:
+            raise ValueError("max_inflight_requests must be positive")
         validate_run_id(args.run_id)
         self.store = get_kvstore(args.registry, raise_on_error=True)
         self.registry = RegistryClient(self.store, cache_ttl=0, max_heartbeat_interval=args.lease_seconds)
@@ -63,7 +68,13 @@ class Worker:
         await registration.register_server(
             f"http://{self.args.advertise_host}",
             port,
-            {"model_path": model_name, "run_id": self.args.run_id, **metadata},
+            {
+                "model_path": model_name,
+                "run_id": self.args.run_id,
+                "replica_id": self.replica_id,
+                "max_inflight_requests": self.max_inflight_requests,
+                **metadata,
+            },
         )
         return registration
 
@@ -260,7 +271,15 @@ def create_app(worker: Worker):
         payload = await request.json()
         name = payload.get("model")
         if not isinstance(name, str) or not worker.available(name):
-            raise HTTPException(503, "requested policy version is not ready on this replica")
+            raise HTTPException(
+                503,
+                "requested policy version is not ready on this replica",
+                headers={"x-litecast-admission-rejected": "1"},
+            )
+        if sum(worker.inflight.values()) >= worker.max_inflight_requests:
+            raise HTTPException(
+                429, "replica capacity exhausted", headers={"x-litecast-admission-rejected": "1", "Retry-After": "1"}
+            )
         if name == base_alias(worker.args.run_id):
             payload["model"] = worker.args.base_model
         worker.inflight[name] = worker.inflight.get(name, 0) + 1
@@ -273,16 +292,15 @@ def create_app(worker: Worker):
             worker.inflight[name] -= 1
             raise
 
-        async def body():
+        async def cleanup():
             try:
-                async for chunk in upstream.aiter_bytes():
-                    yield chunk
-            finally:
                 await upstream.aclose()
+            finally:
                 worker.inflight[name] -= 1
 
-        return StreamingResponse(
-            body(),
+        return ManagedStreamingResponse(
+            upstream.aiter_bytes(),
+            cleanup=cleanup,
             status_code=upstream.status_code,
             media_type=upstream.headers.get("content-type", "application/json"),
         )
@@ -300,6 +318,7 @@ def main():
     parser.add_argument("--port", type=int, default=8100)
     parser.add_argument("--shard-port", type=int, default=8101)
     parser.add_argument("--cache-dir", type=Path, default=Path("/tmp"))
+    parser.add_argument("--max-inflight-requests", type=int, default=4)
     parser.add_argument("--max-versions", type=int, default=8)
     parser.add_argument("--max-adapter-bytes", type=int, default=512 * 1024 * 1024)
     parser.add_argument("--shard-bytes", type=int, default=8 * 1024 * 1024)
@@ -309,7 +328,17 @@ def main():
     parser.add_argument("--require-middle", action="store_true")
     parser.add_argument("--transport", choices=("http", "auto", "ucxx"), default="http")
     args = parser.parse_args()
-    if min(args.max_versions, args.max_adapter_bytes, args.shard_bytes, args.poll_seconds, args.request_timeout) <= 0:
+    if (
+        min(
+            args.max_inflight_requests,
+            args.max_versions,
+            args.max_adapter_bytes,
+            args.shard_bytes,
+            args.poll_seconds,
+            args.request_timeout,
+        )
+        <= 0
+    ):
         parser.error("sizes, limits, and intervals must be positive")
     if args.lease_seconds <= 2 * args.poll_seconds:
         parser.error("lease-seconds must exceed twice poll-seconds")

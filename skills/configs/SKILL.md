@@ -174,3 +174,18 @@ path. Caching a commit alone does not create a cached `main` ref, so leaving the
 Hub repo name in the RL model config can break `pre_download_model` offline.
 The replaceable head uses shared Redis AOF and advertises backend endpoints;
 trainer-owned TCP relays publish stable client URLs via the SQLite bootstrap.
+
+### LiteCast request admission
+
+Use `prime_rl.litecast.gateway:create_app` on the head and set
+`LITECAST_CAPACITY_CONFIG` to the toy's `capacity.toml`. Give sidecars the matching
+`--max-inflight-requests`. Gateway reservations are shared across model versions
+by replica process ID; the worker enforces the authoritative limit. Keep the
+orchestrator episode limit as a separate global bound. Slot lifetime includes
+streaming and cancellation; changing only readiness/min_replicas does not limit
+request concurrency. Deploy gateway and worker changes together because admission
+requires capacity metadata on readiness registrations.
+
+The toy stores `LITECAST_CAPACITY_ENABLED=1` in head/inference task environments.
+This gates the coordinated admission rollout: older submitted specs keep their
+original gateway behavior even if a service restarts from the shared checkout.
