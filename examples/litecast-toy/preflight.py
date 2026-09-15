@@ -14,14 +14,22 @@ def main():
 
     try:
         api = wandb.Api(timeout=30)
-        if not api.api_key or not api.viewer:
+        viewer = api.viewer
+        if not api.api_key or not viewer:
             raise RuntimeError("W&B credentials did not authenticate")
     except Exception:
         raise RuntimeError(
             "W&B preflight failed inside the training container. Supply WANDB_API_KEY "
             "or NETRC pointing to a readable, mounted credentials file."
         ) from None
-    print(f"WANDB_PREFLIGHT_OK seconds={time.monotonic() - started:.2f}", flush=True)
+    expected = os.environ.get("LITECAST_WANDB_USERNAME")
+    if expected and viewer.username != expected:
+        raise RuntimeError(f"W&B credentials do not belong to expected user {expected}")
+    print(
+        f"WANDB_PREFLIGHT_OK username={viewer.username} "
+        f"entity={os.environ.get('WANDB_ENTITY', 'default')} seconds={time.monotonic() - started:.2f}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

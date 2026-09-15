@@ -289,3 +289,22 @@ publication as its watermark. Unconsumed future batches, logs, W&B metrics, and
 checkpoints are outside that sweep. Checkpoint managers enforce checkpoint
 retention after successful saves. Cleanup I/O failures are logged and retried at
 the next sweep instead of killing training.
+
+## Dataset cache and account selection
+
+The trainer stages the pinned reverse-text parquet file into
+`/tmp/litecast-hf/dataset-snapshots/reverse-text-REVISION`, then points the taskset
+at that local directory. A completed cache hit makes no Hub call. On a cold
+node, download retries HTTP 429 and transient server errors for up to ten minutes.
+Prepared Arrow data remains under `/tmp/litecast-hf/datasets`. Cache directories
+are node-local and can be cleared between allocations. Cache-hit reuse and
+loading all 1000 examples with network access disabled are checked on Slurm.
+
+Before starting GPU-role subprocesses, `credentials.py` injects `HF_TOKEN` from
+`/gscratch/ark/graf/.cache/huggingface/token` and, on the trainer, `WANDB_API_KEY`
+from the mounted `.netrc`. Existing environment tokens take precedence. Optional
+`LITECAST_HF_TOKEN_FILE` and `LITECAST_WANDB_TOKEN_FILE` select different token
+files. Tokens are not embedded in YAML, TOML, or command arguments. The trainer
+sets `WANDB_ENTITY=graf` and verifies that its W&B token authenticates as `graf`
+before training. Alternate authorized setups may explicitly set `WANDB_ENTITY`
+and `LITECAST_WANDB_USERNAME` together.

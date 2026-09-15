@@ -153,3 +153,12 @@ locations. Validate relay head replacement using the real Redis binary on Slurm
 Long toy runs keep one checkpoint, six adapter versions, a 12-step rolling window
 of consumed rollout artifacts, and no detailed token exports. Do not delete
 unconsumed batches or the latest checkpoint when trimming intermediates.
+
+Toy GPU roles inject HF_TOKEN and WANDB_API_KEY from mounted credential files
+before spawning processes; never place token values in specs, shell commands,
+or logs. Verify the authenticated W&B username separately from the destination
+entity: graf's token can otherwise log into another default team. This deployment
+explicitly selects entity graf. Reverse-text training must use the staged local
+parquet directory from dataset-cache.py, not a Hub dataset name that repeats
+metadata discovery on every startup. Verify cache hits and offline loading on
+Slurm before relaunching after dataset/authentication changes.

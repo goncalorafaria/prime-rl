@@ -2,6 +2,7 @@
 
 import logging
 import os
+import runpy
 import signal
 import socket
 import subprocess
@@ -82,6 +83,8 @@ def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     os.chdir(ROOT)
     role = sys.argv[1]
+    if role in ("trainer", "inference"):
+        runpy.run_path(str(HERE / "credentials.py"))["configure"](trainer=role == "trainer")
     if role == "trainer":
         subprocess.run(
             ["uv", "run", "--no-project", "--python", sys.executable, "python", str(HERE / "preflight.py")],
@@ -163,7 +166,8 @@ def main():
         if role == "trainer":
             from datasets import load_dataset
 
-            load_dataset("PrimeIntellect/Reverse-Text-RL", split="train")
+            dataset_path = runpy.run_path(str(HERE / "dataset-cache.py"))["stage"]()
+            load_dataset(str(dataset_path), split="train", cache_dir=os.environ["HF_DATASETS_CACHE"])
             os.environ["HF_DATASETS_OFFLINE"] = "1"
         os.environ["HF_HUB_OFFLINE"] = "1"
     if role == "middle":
@@ -230,8 +234,12 @@ def main():
             wait(HEAD, f"middle-{rank}", timeout=3600, healthcheck="none")
         config = tomllib.loads(TRAIN_CONFIG.read_text())
         config["model"]["name"] = str(snapshot)
+        for source in config["orchestrator"]["train"]["source"]:
+            if source["env"]["taskset"]["id"] == "reverse-text-v1":
+                source["env"]["taskset"]["dataset_name"] = str(dataset_path)
         config["output_dir"] = str(OUTPUT / "training")
         config["wandb"]["name"] = RUN
+        config["wandb"]["entity"] = os.environ["WANDB_ENTITY"]
         os.environ["WANDB_MODE"] = "online"
         client = config["orchestrator"]["model"]["client"]
         client["base_url"] = [gateway + "/v1"]
