@@ -18,6 +18,8 @@ RUN = "toy-" + os.environ["REXS_EXPERIMENT_ID"]
 OUTPUT = ROOT / "outputs" / RUN
 HEAD = "sqlite://" + str(OUTPUT / "head.sqlite3")
 TRAIN_CONFIG = Path(os.environ.get("LITECAST_TRAIN_CONFIG", HERE / "train.toml"))
+INFERENCE_CONFIG = Path(os.environ.get("LITECAST_INFERENCE_CONFIG", HERE / "inference.toml"))
+CAPACITY_CONFIG = Path(os.environ.get("LITECAST_CAPACITY_CONFIG", HERE / "capacity.toml"))
 HOST = socket.getfqdn()
 children = []
 
@@ -54,7 +56,7 @@ def watch(records):
 
 def validate_lora_config():
     training = tomllib.loads(TRAIN_CONFIG.read_text())
-    inference = tomllib.loads((HERE / "inference.toml").read_text())
+    inference = tomllib.loads(INFERENCE_CONFIG.read_text())
     lora = training["trainer"]["model"]["lora"]
     if not inference.get("enable_lora"):
         raise ValueError("Separate inference must set enable_lora=true")
@@ -89,7 +91,7 @@ def main():
         redis_port, gateway_port = free_port(), free_port()
         registry = f"redis://{HOST}:{redis_port}/0"
         os.environ["REGISTRY_PATH"] = registry
-        os.environ["LITECAST_CAPACITY_CONFIG"] = str(HERE / "capacity.toml")
+        os.environ["LITECAST_CAPACITY_CONFIG"] = str(CAPACITY_CONFIG)
         os.environ["REGISTRY"] = registry
         redis_directory = OUTPUT / "redis"
         redis_directory.mkdir(exist_ok=True)
@@ -179,7 +181,7 @@ def main():
     elif role == "inference":
         backend, sidecar, shards = free_port(), free_port(), free_port()
         os.environ["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "1"
-        inference_config = tomllib.loads((HERE / "inference.toml").read_text())
+        inference_config = tomllib.loads(INFERENCE_CONFIG.read_text())
         inference_config["model"]["name"] = str(snapshot)
         inference_path = OUTPUT / f"inference-{os.environ.get('BEAKER_REPLICA_RANK', '0')}.toml"
         inference_path.write_text(tomli_w.dumps(inference_config))
@@ -214,7 +216,7 @@ def main():
             str(shards),
             "--require-middle",
             "--max-inflight-requests",
-            str(tomllib.loads((HERE / "capacity.toml").read_text())["max_inflight_per_replica"])
+            str(tomllib.loads(CAPACITY_CONFIG.read_text())["max_inflight_per_replica"])
             if os.getenv("LITECAST_CAPACITY_ENABLED") == "1"
             else "4",
         )

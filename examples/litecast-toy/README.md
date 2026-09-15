@@ -253,3 +253,18 @@ The 50-step config uses batch size 128, group size 8, maximum policy lag 4,
 and 64 in-flight episodes (oversampling factor 0.5). AdamW uses betas
 (0.95, 0.95), epsilon 1e-10, and zero weight decay. The gateway still admits
 only two concurrent requests per inference replica, with up to 64 queued.
+
+## Higher inference concurrency
+
+`experiment-50-aggressive.yaml` uses four A40 inference replicas and the same
+50-step optimizer/batch settings. `train-50-aggressive.toml` allows 256 in-flight
+episodes (oversampling factor 2). `capacity-aggressive.toml` admits 16 requests per
+replica and queues up to 256 requests for at most 300 seconds.
+`inference-aggressive.toml` permits 16 sequences and 4096 scheduled tokens per
+vLLM iteration. The context limit remains 1024 and generation limit remains 256.
+
+The role launcher accepts `LITECAST_INFERENCE_CONFIG` and
+`LITECAST_CAPACITY_CONFIG` alongside `LITECAST_TRAIN_CONFIG`. These settings are
+read at startup; editing files does not retune running processes. Compare trainer
+`time/wait_for_batch` and `time/forward_backward`, orchestrator
+`time/wait_for_policy`, and LiteCast transfer timing to assess the result.

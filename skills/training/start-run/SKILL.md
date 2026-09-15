@@ -135,3 +135,11 @@ the container before starting inference/training. The toy runtime launcher does
 this automatically. It sets HF hub/dataset caches under `/tmp/litecast-hf` after
 container-wrapper overrides; customize with `LITECAST_MODEL_CACHE`. Temporary
 cache retention across allocations is not guaranteed.
+
+The higher-concurrency LiteCast toy variant is
+`examples/litecast-toy/experiment-50-aggressive.yaml`: four inference replicas,
+256 rollout episodes, and 16 active requests per replica. Inference sequence and
+batched-token limits are sized together with gateway/worker admission. The role
+launcher selects configs with `LITECAST_TRAIN_CONFIG`,
+`LITECAST_INFERENCE_CONFIG`, and `LITECAST_CAPACITY_CONFIG`; running processes do
+not hot-reload them. Preserve active runs when preparing comparisons.
