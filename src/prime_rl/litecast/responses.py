@@ -5,6 +5,8 @@ from collections.abc import Awaitable, Callable
 
 from starlette.responses import StreamingResponse
 
+GENERATION_PATHS = ("/v1/completions", "/v1/chat/completions", "/inference/v1/generate")
+
 
 class ManagedStreamingResponse(StreamingResponse):
     def __init__(self, *args, cleanup: Callable[[], Awaitable[None]], **kwargs):
@@ -25,7 +27,7 @@ class DisconnectCancellationMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") not in ("/v1/completions", "/v1/chat/completions"):
+        if scope["type"] != "http" or scope.get("path") not in GENERATION_PATHS:
             return await self.app(scope, receive, send)
         messages = asyncio.Queue(maxsize=1)
         application = asyncio.create_task(self.app(scope, messages.get, send))

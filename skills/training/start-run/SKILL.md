@@ -112,3 +112,9 @@ Runtime copying, compression, compilation and heavy import benchmarks must run
 on a Slurm compute allocation, never on the login node. The build script requests
 16 CPU cores and 64 GB and checks the resulting cache inside the training image.
 Wait for that job to succeed before submitting the training experiment.
+
+PrimeRL renderer clients call `/inference/v1/generate` at the gateway root.
+Validate that native token route end to end through both gateway and sidecar,
+including queue limits and cancellation, before launching training. Its request
+uses `model`, `token_ids` and `sampling_params`; preserve token IDs/logprobs in
+the response and select the exact immutable policy version.

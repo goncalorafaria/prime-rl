@@ -28,7 +28,7 @@ from prime_rl.litecast.protocol import (
     split_adapter,
     validate_run_id,
 )
-from prime_rl.litecast.responses import ManagedStreamingResponse
+from prime_rl.litecast.responses import GENERATION_PATHS, ManagedStreamingResponse
 
 logger = logging.getLogger(__name__)
 
@@ -264,9 +264,8 @@ def create_app(worker: Worker):
             "data": [{"id": name, "object": "model"} for name in worker.serving if worker.available(name)],
         }
 
-    @app.post("/v1/{endpoint:path}")
-    async def proxy(endpoint: str, request: Request):
-        if endpoint not in ("completions", "chat/completions"):
+    async def forward(endpoint: str, request: Request):
+        if endpoint not in GENERATION_PATHS:
             raise HTTPException(404)
         payload = await request.json()
         name = payload.get("model")
@@ -285,7 +284,7 @@ def create_app(worker: Worker):
         worker.inflight[name] = worker.inflight.get(name, 0) + 1
         try:
             upstream = await worker.backend.send(
-                worker.backend.build_request("POST", f"/v1/{endpoint}", json=payload),
+                worker.backend.build_request("POST", endpoint, json=payload),
                 stream=True,
             )
         except BaseException:
@@ -304,6 +303,14 @@ def create_app(worker: Worker):
             status_code=upstream.status_code,
             media_type=upstream.headers.get("content-type", "application/json"),
         )
+
+    @app.post("/v1/{endpoint:path}")
+    async def proxy(endpoint: str, request: Request):
+        return await forward(f"/v1/{endpoint}", request)
+
+    @app.post("/inference/v1/generate")
+    async def generate(request: Request):
+        return await forward("/inference/v1/generate", request)
 
     return app
 

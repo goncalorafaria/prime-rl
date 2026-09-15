@@ -13,15 +13,17 @@ from literegistry import RegistryClient, get_kvstore
 from literegistry.gateway import (
     GatewayRequestError,
     LoadBalancedRouting,
+    ProxyRoute,
     RoutingResponse,
     default_proxy_routes,
+    service_from_field,
 )
 from literegistry.gateway import (
     create_app as registry_app,
 )
 from starlette.responses import JSONResponse, Response
 
-from prime_rl.litecast.responses import DisconnectCancellationMiddleware, ManagedStreamingResponse
+from prime_rl.litecast.responses import GENERATION_PATHS, DisconnectCancellationMiddleware, ManagedStreamingResponse
 
 
 @dataclass(frozen=True)
@@ -115,7 +117,7 @@ class CapacityRouting:
         self.changed.set()
 
     async def forward(self, request):
-        if request.endpoint.strip("/") not in ("v1/completions", "v1/chat/completions"):
+        if "/" + request.endpoint.strip("/") not in GENERATION_PATHS:
             return await self.fallback.forward(request)
         deadline = time.monotonic() + self.config.queue_timeout_seconds
         while True:
@@ -186,11 +188,16 @@ class CapacityRouting:
 def create_app(registry=None, config=None):
     registry = registry or RegistryClient(get_kvstore(os.environ["REGISTRY_PATH"], raise_on_error=True), cache_ttl=0)
     routing = CapacityRouting(registry, config or CapacityConfig.load(os.getenv("LITECAST_CAPACITY_CONFIG")))
+    proxy_routes = default_proxy_routes() + [
+        ProxyRoute(
+            "/inference/v1/generate", "inference/v1/generate", service_from_field("model"), name="token_generate"
+        )
+    ]
     routes = [
         replace(route, response_mapper=lambda body: body if isinstance(body, Response) else JSONResponse(body))
-        if route.path in ("/v1/completions", "/v1/chat/completions")
+        if route.path in GENERATION_PATHS
         else route
-        for route in default_proxy_routes()
+        for route in proxy_routes
     ]
     app = registry_app(registry=registry, routing=routing, routes=routes, enable_registration=False)
     app.state.capacity_routing = routing

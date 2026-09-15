@@ -227,3 +227,10 @@ Runtime copying, compression, compilation and heavy import benchmarks must run
 on a Slurm compute allocation, never on the login node. The build script requests
 16 CPU cores and 64 GB and checks the resulting cache inside the training image.
 Wait for that job to succeed before submitting the training experiment.
+
+The gateway and worker also forward `/inference/v1/generate`, used by PrimeRL
+training clients for exact token IDs and logprobs. It shares the same per-replica
+capacity and cancellation handling as the OpenAI completion routes. The immutable
+`model` selects the policy version; token IDs, sampling parameters and responses
+pass through unchanged. The base alias is rewritten to the local base-model name
+only at the worker. All of this routing lives in the PrimeRL fork.

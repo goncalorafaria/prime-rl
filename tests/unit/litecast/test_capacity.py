@@ -37,9 +37,14 @@ async def replica(tmp_path, config, gate):
     async def models():
         return {"data": [{"id": "model"}]}
 
+    @app.post("/inference/v1/generate")
     @app.post("/v1/completions")
     async def complete(request: Request):
-        assert (await request.json())["model"] == "model"
+        payload = await request.json()
+        assert payload["model"] == "model"
+        if request.url.path == "/inference/v1/generate":
+            assert payload["token_ids"] == [101, 102]
+            assert payload["sampling_params"] == {"max_tokens": 1, "logprobs": 1}
 
         async def body():
             counts["active"] += 1
@@ -80,6 +85,14 @@ async def replica(tmp_path, config, gate):
         yield worker, counts
 
 
+def generation_payload(config):
+    return {
+        "model": base_alias(config.run_id),
+        "token_ids": [101, 102],
+        "sampling_params": {"max_tokens": 1, "logprobs": 1},
+    }
+
+
 def publisher_config(tmp_path):
     return SimpleNamespace(
         registry=f"file://{tmp_path / 'registry'}",
@@ -97,7 +110,8 @@ def publisher_config(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_burst_queues_and_new_replica_adds_capacity(tmp_path):
+@pytest.mark.parametrize("endpoint", ["/v1/completions", "/inference/v1/generate"])
+async def test_burst_queues_and_new_replica_adds_capacity(tmp_path, endpoint):
     config = publisher_config(tmp_path)
     publisher = Publisher(config, "model")
     await publisher.start()
@@ -109,10 +123,7 @@ async def test_burst_queues_and_new_replica_adds_capacity(tmp_path):
     try:
         async with replica(tmp_path, config, gate) as (_, first), serve(app, port):
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=10) as client:
-                tasks = [
-                    asyncio.create_task(client.post("/v1/completions", json={"model": base_alias(config.run_id)}))
-                    for _ in range(3)
-                ]
+                tasks = [asyncio.create_task(client.post(endpoint, json=generation_payload(config))) for _ in range(3)]
                 await until(lambda: first["active"] == 1 and len(routing.pending) == 2)
                 assert first["total"] == 1
                 async with replica(tmp_path, config, gate) as (_, second):
@@ -133,7 +144,8 @@ async def test_burst_queues_and_new_replica_adds_capacity(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_queue_overflow_disconnect_and_worker_hard_limit(tmp_path):
+@pytest.mark.parametrize("endpoint", ["/v1/completions", "/inference/v1/generate"])
+async def test_queue_overflow_disconnect_and_worker_hard_limit(tmp_path, endpoint):
     config = publisher_config(tmp_path)
     publisher = Publisher(config, "model")
     await publisher.start()
@@ -148,16 +160,16 @@ async def test_queue_overflow_disconnect_and_worker_hard_limit(tmp_path):
     try:
         async with replica(tmp_path, config, gate) as (worker, counts), serve(app, port):
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=10) as client:
-                request = {"model": base_alias(config.run_id)}
-                first = asyncio.create_task(client.post("/v1/completions", json=request))
+                request = generation_payload(config)
+                first = asyncio.create_task(client.post(endpoint, json=request))
                 tasks.append(first)
                 await until(lambda: counts["active"] == 1)
-                queued = asyncio.create_task(client.post("/v1/completions", json=request))
+                queued = asyncio.create_task(client.post(endpoint, json=request))
                 tasks.append(queued)
                 await until(lambda: len(routing.pending) == 1)
-                assert (await client.post("/v1/completions", json=request)).status_code == 429
+                assert (await client.post(endpoint, json=request)).status_code == 429
                 # Bypassing gateway admission still cannot overload the backend.
-                direct = await client.post(f"http://127.0.0.1:{worker.args.port}/v1/completions", json=request)
+                direct = await client.post(f"http://127.0.0.1:{worker.args.port}{endpoint}", json=request)
                 assert direct.status_code == 429
                 assert counts["total"] == 1
                 queued.cancel()
@@ -169,7 +181,7 @@ async def test_queue_overflow_disconnect_and_worker_hard_limit(tmp_path):
                 await asyncio.gather(first, return_exceptions=True)
                 await until(lambda: not routing.active and sum(worker.inflight.values()) == 0)
                 gate.set()
-                assert (await client.post("/v1/completions", json=request)).status_code == 200
+                assert (await client.post(endpoint, json=request)).status_code == 200
                 assert counts["peak"] == 1
     finally:
         gate.set()
@@ -201,7 +213,8 @@ async def test_capacity_is_shared_across_versions_and_queue_timeout_releases_tic
 
 
 @pytest.mark.asyncio
-async def test_worker_rejection_requeues_until_another_replica_joins(tmp_path):
+@pytest.mark.parametrize("endpoint", ["/v1/completions", "/inference/v1/generate"])
+async def test_worker_rejection_requeues_until_another_replica_joins(tmp_path, endpoint):
     config = publisher_config(tmp_path)
     publisher = Publisher(config, "model")
     await publisher.start()
@@ -213,13 +226,13 @@ async def test_worker_rejection_requeues_until_another_replica_joins(tmp_path):
     try:
         async with replica(tmp_path, config, gate) as (worker, first), serve(app, port):
             async with httpx.AsyncClient(timeout=10) as client:
-                request = {"model": base_alias(config.run_id)}
+                request = generation_payload(config)
                 # Another caller/gateway occupies a slot unknown to this gateway.
                 async with client.stream(
-                    "POST", f"http://127.0.0.1:{worker.args.port}/v1/completions", json=request
+                    "POST", f"http://127.0.0.1:{worker.args.port}{endpoint}", json=request
                 ) as direct:
                     await until(lambda: first["active"] == 1)
-                    task = asyncio.create_task(client.post(f"http://127.0.0.1:{port}/v1/completions", json=request))
+                    task = asyncio.create_task(client.post(f"http://127.0.0.1:{port}{endpoint}", json=request))
                     await until(lambda: routing.worker_rejections > 0)
                     assert first["total"] == 1
                     async with replica(tmp_path, config, gate) as (_, second):
