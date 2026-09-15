@@ -308,3 +308,8 @@ files. Tokens are not embedded in YAML, TOML, or command arguments. The trainer
 sets `WANDB_ENTITY=graf` and verifies that its W&B token authenticates as `graf`
 before training. Alternate authorized setups may explicitly set `WANDB_ENTITY`
 and `LITECAST_WANDB_USERNAME` together.
+
+Long-run middle profiles reserve 16 CPUs and 64 GB each without requesting an
+exclusive whole host. Slurm keeps those CPUs unshared on this partition. This
+avoids waiting for an entirely idle CPU node while preserving the requested
+resources. The current run places its two middle replicas on separate hosts.

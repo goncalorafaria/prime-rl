@@ -162,3 +162,10 @@ explicitly selects entity graf. Reverse-text training must use the staged local
 parquet directory from dataset-cache.py, not a Hub dataset name that repeats
 metadata discovery on every startup. Verify cache hits and offline loading on
 Slurm before relaunching after dataset/authentication changes.
+
+For long-run CPU middle allocations, request 16 CPUs/64 GB without whole-node
+`exclusive`; that flag can leave GPUs waiting an hour for idle CPU hosts. When
+replacing pending allocations for placement, hold the Rex experiment lock, verify
+the scheduler still reports PENDING, preserve script hashes/state, and exclude
+the other middle's host to keep the pair separate. Never cancel a running
+allocation under a pending-only placement change.
