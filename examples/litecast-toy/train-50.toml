@@ -1,0 +1,129 @@
+max_steps = 50
+output_dir = "outputs/litecast-toy"
+
+[wandb]
+project = "litecast-toy"
+name = "litecast-toy-a40"
+tags = ["litecast", "qwen3.5-2b", "lora", "a40", "smoke", "50-steps"]
+
+[deployment]
+type = "single_node"
+num_train_gpus = 1
+num_infer_gpus = 0
+
+[model]
+name = "Qwen/Qwen3.5-2B"
+
+[trainer]
+enable_token_export = true
+
+[trainer.model]
+compile = "None"
+# FSDP offloads parameters, gradients, and optimizer states together.
+fsdp_cpu_offload = true
+optim_cpu_offload = false
+seq_len = 1024
+attn = "auto"
+impl = "auto"
+
+[trainer.model.ac]
+mode = "full"
+freq = 1
+
+[trainer.model.ac_offloading]
+max_inflight_activations = 2
+pin_memory = true
+
+[trainer.model.lora]
+rank = 8
+alpha = 16
+dropout = 0.0
+target_modules = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+]
+
+[trainer.loss]
+type = "default"
+aggregation = "group_token_mean"
+kl_tau = 0.0
+
+[trainer.optim]
+type = "adamw"
+lr = 1e-05
+max_norm = 1.0
+weight_decay = 0.0
+eps = 1e-12
+betas1 = 0.95
+betas2 = 0.95
+
+[orchestrator]
+batch_size = 4
+group_size = 2
+seq_len = 1024
+max_off_policy_steps = 2
+oversampling_factor = 1.0
+max_inflight_episodes = 4
+collect_inference_metrics = false
+
+[orchestrator.model.lora]
+name = "search-2b"
+rank = 8
+alpha = 16
+
+[orchestrator.model.client]
+base_url = [
+    "http://registry-host:1212/v1",
+]
+
+[orchestrator.model.client.litecast]
+registry = "redis://registry-host:6379/0"
+run_id = "litecast-toy"
+origin_host = "trainer-host"
+origin_port = 8201
+min_replicas = 1
+retain_versions = 8
+transport = "http"
+
+[orchestrator.train.sampling]
+max_completion_tokens = 256
+temperature = 1.0
+top_p = 0.97
+
+[orchestrator.train.sampling.extra_body.chat_template_kwargs]
+enable_thinking = false
+
+[[orchestrator.train.source]]
+name = "reverse-text"
+
+[orchestrator.train.source.env.taskset]
+id = "reverse-text-v1"
+
+[orchestrator.train.source.env.agent.harness]
+id = "null"
+
+[orchestrator.train.source.env.agent.runtime]
+type = "subprocess"
+
+[orchestrator.renderer]
+name = "qwen3.5"
+enable_thinking = false
+thinking_retention = "tool_cycle"
+
+[weight_broadcast]
+type = "filesystem"
+
+[ckpt]
+interval = 10
+keep_last = 3
+
+[log]
+level = "info"
+
+[rollout_transport]
+type = "filesystem"

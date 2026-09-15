@@ -17,6 +17,7 @@ HERE = Path(__file__).resolve().parent
 RUN = "toy-" + os.environ["REXS_EXPERIMENT_ID"]
 OUTPUT = ROOT / "outputs" / RUN
 HEAD = "sqlite://" + str(OUTPUT / "head.sqlite3")
+TRAIN_CONFIG = Path(os.environ.get("LITECAST_TRAIN_CONFIG", HERE / "train.toml"))
 HOST = socket.getfqdn()
 children = []
 
@@ -52,7 +53,7 @@ def watch(records):
 
 
 def validate_lora_config():
-    training = tomllib.loads((HERE / "train.toml").read_text())
+    training = tomllib.loads(TRAIN_CONFIG.read_text())
     inference = tomllib.loads((HERE / "inference.toml").read_text())
     lora = training["trainer"]["model"]["lora"]
     if not inference.get("enable_lora"):
@@ -221,7 +222,7 @@ def main():
     elif role == "trainer":
         for rank in range(2):
             wait(HEAD, f"middle-{rank}", timeout=3600, healthcheck="none")
-        config = tomllib.loads((HERE / "train.toml").read_text())
+        config = tomllib.loads(TRAIN_CONFIG.read_text())
         config["model"]["name"] = str(snapshot)
         config["output_dir"] = str(OUTPUT / "training")
         config["wandb"]["name"] = RUN

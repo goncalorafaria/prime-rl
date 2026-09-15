@@ -238,3 +238,13 @@ capacity and cancellation handling as the OpenAI completion routes. The immutabl
 `model` selects the policy version; token IDs, sampling parameters and responses
 pass through unchanged. The base alias is rewritten to the local base-model name
 only at the worker. All of this routing lives in the PrimeRL fork.
+
+## 50-step training run
+
+`rexs submit examples/litecast-toy/experiment-50.yaml --strict --name litecast-toy-a40-50`
+launches the same five allocations with two-hour limits and `train-50.toml`.
+It trains for 50 optimizer steps and saves full checkpoints every 10 steps plus
+the final checkpoint. The three-step configuration stays available unchanged.
+`LITECAST_TRAIN_CONFIG` selects the training TOML for both LoRA validation and launch.
+Keep the Rex controller refreshing this experiment until completion for restarts
+and cleanup.
