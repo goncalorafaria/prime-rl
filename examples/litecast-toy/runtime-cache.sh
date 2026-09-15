@@ -80,6 +80,7 @@ flock -u 9
 exec 9>&-
 export UV_PROJECT_ENVIRONMENT=$local_root/runtime
 export PATH=$local_root/runtime/bin:$PATH
+source "$here/model-cache.sh"
 if [[ ${1:-} == check ]]; then
     shift
     exec uv run --no-project --python "$local_root/runtime/bin/python" python "$@"

@@ -44,3 +44,16 @@ GPU memory. This feature does not multiplex arbitrary base weights inside one
 vLLM engine. `max_versions` and adapter cache limits apply per tenant, so memory
 requirements grow with the subscription count. Single-trainer CLI usage remains
 available with `--run-id` and `--base-model`.
+
+Before launching each inference backend, source the local cache settings inside
+its container:
+
+```bash
+source examples/litecast-toy/model-cache.sh
+uv run inference --model.name Qwen/Qwen3.5-2B --enable-lora --max-lora-rank 8
+```
+
+Models cache under `/tmp/litecast-hf/hub`, shared by tenants on that node.
+`LITECAST_MODEL_CACHE` overrides the root. Start other engines on separate ports.
+The sidecar itself stores temporary adapters under its `--cache-dir` (default
+`/tmp`). These node-local caches can disappear on preemption or node cleanup.

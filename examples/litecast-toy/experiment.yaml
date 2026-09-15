@@ -23,7 +23,7 @@ tasks:
     value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
   - name: PYTHONPATH
     value: /gscratch/ark/graf/prime-rl-shardcast/src
-  - name: HF_HOME
+  - name: LITECAST_MODEL_CACHE
     value: /tmp/litecast-hf
   - name: GATEWAY_REGISTRATION_ENABLED
     value: 'false'
@@ -54,7 +54,7 @@ tasks:
     value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
   - name: PYTHONPATH
     value: /gscratch/ark/graf/prime-rl-shardcast/src
-  - name: HF_HOME
+  - name: LITECAST_MODEL_CACHE
     value: /tmp/litecast-hf
   - name: GATEWAY_REGISTRATION_ENABLED
     value: 'false'
@@ -85,7 +85,7 @@ tasks:
     value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
   - name: PYTHONPATH
     value: /gscratch/ark/graf/prime-rl-shardcast/src
-  - name: HF_HOME
+  - name: LITECAST_MODEL_CACHE
     value: /tmp/litecast-hf
   - name: GATEWAY_REGISTRATION_ENABLED
     value: 'false'
@@ -118,7 +118,7 @@ tasks:
     value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
   - name: PYTHONPATH
     value: /gscratch/ark/graf/prime-rl-shardcast/src
-  - name: HF_HOME
+  - name: LITECAST_MODEL_CACHE
     value: /tmp/litecast-hf
   - name: GATEWAY_REGISTRATION_ENABLED
     value: 'false'

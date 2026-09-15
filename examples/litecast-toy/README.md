@@ -216,7 +216,11 @@ when replacing dependencies; never overwrite an existing archive.
 
 `RUNTIME_CACHE_MISS` / `RUNTIME_CACHE_HIT` log staging time. New hosts or cleaned
 local storage still require extraction; scheduler and GPU initialization time are
-not cached. Model downloads already use the persistent per-node Hugging Face cache.
+not cached. Model downloads use `/tmp/litecast-hf/hub` and datasets use
+`/tmp/litecast-hf/datasets`. The launcher sets these paths inside the container,
+after wrapper environment overrides. Set `LITECAST_MODEL_CACHE` to choose another
+cache root. Files are reused while the node retains them; `/tmp` can be cleaned
+between allocations, and each new node downloads its own copy.
 
 The trainer sets `NETRC` to the mounted host credentials file. Its bounded W&B
 preflight runs inside the container before model startup and must authenticate

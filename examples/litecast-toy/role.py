@@ -151,7 +151,7 @@ def main():
         from huggingface_hub import snapshot_download
 
         revision = "15852e8c16360a2fea060d615a32b45270f8a8fc"
-        snapshot = snapshot_download("Qwen/Qwen3.5-2B", revision=revision)
+        snapshot = snapshot_download("Qwen/Qwen3.5-2B", revision=revision, cache_dir=os.environ["HF_HUB_CACHE"])
         print(f"MODEL_STAGED revision={revision} path={snapshot}", flush=True)
         if role == "trainer":
             from datasets import load_dataset

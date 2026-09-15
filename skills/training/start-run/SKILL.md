@@ -129,3 +129,9 @@ Size backend LoRA CPU slots for the sum of retained versions across its tenants.
 Keep one sidecar pool per backend so adapter ownership and admission are shared.
 Middle processes still subscribe per run. See the adjacent README for readiness,
 capacity, trusted-network scope, and startup-only subscription behavior.
+
+For LiteCast model downloads, source `examples/litecast-toy/model-cache.sh` inside
+the container before starting inference/training. The toy runtime launcher does
+this automatically. It sets HF hub/dataset caches under `/tmp/litecast-hf` after
+container-wrapper overrides; customize with `LITECAST_MODEL_CACHE`. Temporary
+cache retention across allocations is not guaranteed.
