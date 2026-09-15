@@ -217,6 +217,11 @@ async def test_registry_middle_supervisors_publish_ready_sources(tmp_path):
         for process in processes:
             process.terminate()
             await blocking(process.wait, 10)
+        for index in range(2):
+            output = (tmp_path / f"middle-{index}.log").read_text()
+            assert "MIDDLE_STARTED run=supervised" in output
+            assert "MIDDLE_STATUS phase=ready" in output
+            assert "MIDDLE_READY step=1" in output
         with pytest.raises(RuntimeError, match="no valid LiteCast source"):
             # The live origin must not satisfy a middle-only request.
             await fetch_publication(

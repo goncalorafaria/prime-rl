@@ -189,3 +189,8 @@ requires capacity metadata on readiness registrations.
 The toy stores `LITECAST_CAPACITY_ENABLED=1` in head/inference task environments.
 This gates the coordinated admission rollout: older submitted specs keep their
 original gateway behavior even if a service restarts from the shared checkout.
+
+Middle supervisors create LiteCast servers only after discovering a publication
+origin. Use their `MIDDLE_STARTED` / periodic `MIDDLE_STATUS` records to distinguish
+idle startup from a stuck download; a Redis connection log alone is not transfer
+readiness. Existing processes require restart before new logging code takes effect.

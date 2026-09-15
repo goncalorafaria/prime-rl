@@ -6,6 +6,7 @@ import json
 import logging
 import signal
 import tempfile
+import time
 from pathlib import Path
 
 from literegistry import RegistryClient, get_kvstore
@@ -25,6 +26,9 @@ async def serve(args):
     registrations = {}
     middle = None
     owner = None
+    last_status = None
+    last_status_time = float("-inf")
+    logger.info("MIDDLE_STARTED run=%s configured_endpoint=http://%s:%s", args.run_id, args.advertise_host, args.port)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -33,6 +37,8 @@ async def serve(args):
         try:
             while not stop.is_set():
                 raw = await store.get(desired_key(args.run_id))
+                publications = []
+                phase = "waiting_for_publisher"
                 if raw is None:
                     for registration in registrations.values():
                         await registration.deregister()
@@ -45,6 +51,7 @@ async def serve(args):
                         raise RuntimeError("publisher changed; restart middle to reset local version identities")
                     owner = desired["owner"]
                     publications = [Publication(**p) for p in desired["publications"]]
+                    phase = "waiting_for_weights" if not publications else "waiting_for_origin"
                     records = await registry.models(force=True)
                     for publication in publications:
                         if publication.run_id != args.run_id or publication.size > args.max_adapter_bytes:
@@ -64,6 +71,7 @@ async def serve(args):
                                 ram_cache_bytes=args.max_adapter_bytes * args.max_versions,
                                 disk_mirror=False,
                             )
+                        phase = "syncing"
                         if version not in middle.processed_versions or version not in middle.store:
                             continue
                         if service not in registrations:
@@ -106,6 +114,16 @@ async def serve(args):
                             del registrations[service]
                         else:
                             await registration.heartbeat(f"http://{args.advertise_host}", middle.port)
+                if publications and len(registrations) == len(publications):
+                    phase = "ready"
+                status = (phase, len(publications), len(registrations), middle is not None)
+                now = time.monotonic()
+                if status != last_status or now - last_status_time >= 30:
+                    logger.info(
+                        "MIDDLE_STATUS phase=%s published_versions=%s cached_versions=%s server_started=%s",
+                        *status,
+                    )
+                    last_status, last_status_time = status, now
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=1)
                 except TimeoutError:

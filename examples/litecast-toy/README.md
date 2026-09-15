@@ -193,3 +193,10 @@ HTTP requests, not tokens, so tune the limit for the model and sequence lengths.
 Deploy the PrimeRL gateway and updated sidecars together; workers without capacity
 metadata are not eligible for this routing policy. The current running experiment
 has not been restarted to install this change.
+
+Middle supervisors log `MIDDLE_STARTED`, then `MIDDLE_STATUS` on state changes
+and every 30 seconds. The status distinguishes waiting for a publisher, waiting
+for weights/origin, syncing, and ready; it includes published/cache counts and
+whether the LiteCast server has actually started. The server is created lazily
+when an origin is discovered, so no library transfer logs are expected before
+publication. `MIDDLE_READY` remains the per-adapter verified-cache event.
