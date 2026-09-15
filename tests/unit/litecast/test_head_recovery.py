@@ -20,11 +20,12 @@ def free_port():
 
 
 @pytest.mark.asyncio
-async def test_head_replacement_preserves_state_and_relay_address(tmp_path):
+@pytest.mark.parametrize("scheme", ["file", "sqlite"])
+async def test_head_replacement_preserves_state_and_relay_address(tmp_path, scheme):
     binary = os.getenv("LITECAST_TEST_REDIS_SERVER") or shutil.which("redis-server")
     if binary is None:
         pytest.skip("redis-server required")
-    bootstrap = f"sqlite://{tmp_path / 'bootstrap.sqlite3'}"
+    bootstrap = f"{scheme}://{tmp_path / 'bootstrap'}"
     relay = await asyncio.start_server(lambda r, w: forward(r, w, bootstrap, "redis-backend"), "127.0.0.1", 0)
     relay_port = relay.sockets[0].getsockname()[1]
     backend = None
@@ -83,3 +84,58 @@ async def test_head_replacement_preserves_state_and_relay_address(tmp_path):
         if backend is not None:
             backend.terminate()
             backend.wait(timeout=5)
+
+
+@pytest.mark.parametrize("kind", ["file", "sqlite"])
+def test_bootstrap_retries_transient_io_and_bounds_failure(kind):
+    import errno
+    import sqlite3
+
+    from prime_rl.litecast.bootstrap import retry_io
+
+    error = OSError(errno.EIO, "disk I/O error")
+    if kind == "sqlite":
+        error = sqlite3.OperationalError("disk I/O error")
+        error.sqlite_errorcode = sqlite3.SQLITE_IOERR
+    calls = []
+
+    def interrupted_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise error
+        return "endpoint"
+
+    assert retry_io(interrupted_once, retry_interval=0) == "endpoint"
+    assert len(calls) == 2
+
+    def broken():
+        raise error
+
+    with pytest.raises(type(error)):
+        retry_io(broken, retry_seconds=0)
+
+    def invalid():
+        raise PermissionError(errno.EACCES, "not permitted")
+
+    with pytest.raises(PermissionError):
+        retry_io(invalid)
+
+
+def test_retention_keeps_recent_pending_and_checkpoint_artifacts(tmp_path):
+    from prime_rl.litecast.retention import prune_intermediates
+
+    run = tmp_path / "run_default"
+    for folder in ("broadcasts", "rollouts", "token_exports", "checkpoints"):
+        for step in (1, 8, 9, 14, 15, 20, 21):
+            path = run / folder / f"step_{step}"
+            path.mkdir(parents=True)
+            if folder == "broadcasts" and step <= 20:
+                (path / "STABLE").touch()
+    prune_intermediates(tmp_path, keep_rollout_steps=12, keep_adapter_steps=6)
+    assert not (run / "rollouts/step_8").exists()
+    assert (run / "rollouts/step_9").exists()
+    assert not (run / "broadcasts/step_14").exists()
+    assert (run / "broadcasts/step_15").exists()
+    assert (run / "broadcasts/step_21").exists()
+    assert (run / "rollouts/step_21").exists()
+    assert (run / "checkpoints/step_1").exists()

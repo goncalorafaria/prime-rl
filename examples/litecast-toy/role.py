@@ -1,5 +1,6 @@
 """Task supervisor for the single Rex LiteCast training experiment."""
 
+import logging
 import os
 import signal
 import socket
@@ -10,13 +11,16 @@ import tomllib
 from pathlib import Path
 
 import tomli_w
-from literegistry.coop.endpoints import endpoint_healthy, publish, wait
+from literegistry.coop.endpoints import endpoint_healthy
+
+from prime_rl.litecast.bootstrap import publish, wait
+from prime_rl.litecast.retention import prune_intermediates
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 RUN = "toy-" + os.environ["REXS_EXPERIMENT_ID"]
 OUTPUT = ROOT / "outputs" / RUN
-HEAD = "sqlite://" + str(OUTPUT / "head.sqlite3")
+HEAD = (OUTPUT / "bootstrap").as_uri()
 TRAIN_CONFIG = Path(os.environ.get("LITECAST_TRAIN_CONFIG", HERE / "train.toml"))
 INFERENCE_CONFIG = Path(os.environ.get("LITECAST_INFERENCE_CONFIG", HERE / "inference.toml"))
 CAPACITY_CONFIG = Path(os.environ.get("LITECAST_CAPACITY_CONFIG", HERE / "capacity.toml"))
@@ -235,7 +239,18 @@ def main():
         destination = OUTPUT / "train.toml"
         destination.write_text(tomli_w.dumps(config))
         training = start("uv", "run", "--no-sync", "rl", "@", str(destination))
+        next_prune = time.monotonic() + 30
         while training.poll() is None:
+            if time.monotonic() >= next_prune and config["max_steps"] > 3:
+                try:
+                    prune_intermediates(
+                        OUTPUT / "training",
+                        keep_rollout_steps=config["ckpt"]["interval"] + 2,
+                        keep_adapter_steps=client["litecast"]["retain_versions"],
+                    )
+                except OSError:
+                    logging.exception("Intermediate cleanup failed; retrying on the next sweep")
+                next_prune = time.monotonic() + 30
             for child in children:
                 if child is not training and child.poll() is not None:
                     raise RuntimeError("Trainer coordination relay exited")

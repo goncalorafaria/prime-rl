@@ -5,7 +5,7 @@ import asyncio
 import logging
 from urllib.parse import urlparse
 
-from literegistry.coop.endpoints import publish, wait
+from prime_rl.litecast.bootstrap import publish, wait
 
 logger = logging.getLogger(__name__)
 

@@ -27,7 +27,7 @@ rexs validate examples/litecast-toy/experiment.yaml --strict
 rexs submit examples/litecast-toy/experiment.yaml --strict --name litecast-toy
 ```
 
-The run uses its Rex experiment ID for the SQLite bootstrap namespace and
+The run uses its Rex experiment ID for the file-backed bootstrap namespace and
 LiteRegistry run ID. Small checkpoints, logs and token exports are under
 `outputs/toy-EXPERIMENT_ID`; model caches and temporary adapters use node-local
 `/tmp`. The head advertises dynamically selected Redis/gateway ports. All
@@ -148,7 +148,7 @@ A replaced worker/middle rebuilds its cache from the current publisher.
 The head persists Redis AOF under the run's shared `redis/` directory. Redis uses
 `appendfsync everysec`; a host crash can lose the most recent second, and live
 publisher/worker heartbeats rebuild discovery metadata. The head publishes its
-current backend addresses in the shared SQLite bootstrap. Trainer-owned TCP
+current backend addresses in the shared file-backed bootstrap. Trainer-owned TCP
 relays expose stable Redis/gateway URLs and resolve the head on each connection,
 so clients reconnect after a head replacement changes hosts or ports. A dropped
 request can fail and require retry; recovery is not uninterrupted service.
@@ -268,3 +268,24 @@ The role launcher accepts `LITECAST_INFERENCE_CONFIG` and
 read at startup; editing files does not retune running processes. Compare trainer
 `time/wait_for_batch` and `time/forward_backward`, orchestrator
 `time/wait_for_policy`, and LiteCast transfer timing to assess the result.
+
+
+## Bootstrap resilience and bounded retention
+
+The experiment advertises head/relay/middle endpoints through LiteRegistry's
+file backend at `outputs/toy-ID/bootstrap`. Each endpoint is atomically replaced;
+Redis remains the main registry. Shared bootstrap operations retry transient I/O
+errors for up to 20 seconds, while permanent errors propagate. This removes the
+shared SQLite database from the experiment's bootstrap path. A backend change
+requires all roles to restart together; mixed bootstrap locations cannot discover
+each other. LiteRegistry source is unchanged.
+
+Long runs disable detailed token exports and keep only the latest full and weight
+checkpoint, with checkpoint saves every 10 steps plus the final step. LiteCast
+retains six adapter versions for policy lag four. A supervisor sweep every
+30 seconds discards rollout/token-export steps older than a 12-step window and
+broadcast artifacts older than six steps, using the latest stable trainer
+publication as its watermark. Unconsumed future batches, logs, W&B metrics, and
+checkpoints are outside that sweep. Checkpoint managers enforce checkpoint
+retention after successful saves. Cleanup I/O failures are logged and retried at
+the next sweep instead of killing training.

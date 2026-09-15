@@ -143,3 +143,13 @@ batched-token limits are sized together with gateway/worker admission. The role
 launcher selects configs with `LITECAST_TRAIN_CONFIG`,
 `LITECAST_INFERENCE_CONFIG`, and `LITECAST_CAPACITY_CONFIG`; running processes do
 not hot-reload them. Preserve active runs when preparing comparisons.
+
+
+LiteCast toy bootstrap uses `file://.../outputs/toy-ID/bootstrap`, not a shared
+SQLite database. Transient endpoint I/O is retried in the PrimeRL bootstrap
+wrapper for up to 20 seconds. Restart all roles together when changing bootstrap
+locations. Validate relay head replacement using the real Redis binary on Slurm
+(`LITECAST_TEST_REDIS_SERVER=/gscratch/ark/graf/redis-stable/src/redis-server`).
+Long toy runs keep one checkpoint, six adapter versions, a 12-step rolling window
+of consumed rollout artifacts, and no detailed token exports. Do not delete
+unconsumed batches or the latest checkpoint when trimming intermediates.

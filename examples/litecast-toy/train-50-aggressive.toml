@@ -15,7 +15,7 @@ num_infer_gpus = 0
 name = "Qwen/Qwen3.5-2B"
 
 [trainer]
-enable_token_export = true
+enable_token_export = false
 
 [trainer.model]
 compile = "None"
@@ -87,7 +87,7 @@ run_id = "litecast-toy"
 origin_host = "trainer-host"
 origin_port = 8201
 min_replicas = 1
-retain_versions = 8
+retain_versions = 6
 transport = "http"
 
 [orchestrator.train.sampling]
@@ -120,7 +120,7 @@ type = "filesystem"
 
 [ckpt]
 interval = 10
-keep_last = 3
+keep_last = 1
 
 [log]
 level = "info"
