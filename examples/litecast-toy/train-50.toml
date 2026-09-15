@@ -58,17 +58,17 @@ type = "adamw"
 lr = 1e-05
 max_norm = 1.0
 weight_decay = 0.0
-eps = 1e-12
+eps = 1e-10
 betas1 = 0.95
 betas2 = 0.95
 
 [orchestrator]
-batch_size = 4
-group_size = 2
+batch_size = 128
+group_size = 8
 seq_len = 1024
-max_off_policy_steps = 2
-oversampling_factor = 1.0
-max_inflight_episodes = 4
+max_off_policy_steps = 4
+oversampling_factor = 0.5
+max_inflight_episodes = 64
 collect_inference_metrics = false
 
 [orchestrator.model.lora]

@@ -248,3 +248,8 @@ the final checkpoint. The three-step configuration stays available unchanged.
 `LITECAST_TRAIN_CONFIG` selects the training TOML for both LoRA validation and launch.
 Keep the Rex controller refreshing this experiment until completion for restarts
 and cleanup.
+
+The 50-step config uses batch size 128, group size 8, maximum policy lag 4,
+and 64 in-flight episodes (oversampling factor 0.5). AdamW uses betas
+(0.95, 0.95), epsilon 1e-10, and zero weight decay. The gateway still admits
+only two concurrent requests per inference replica, with up to 64 queued.
