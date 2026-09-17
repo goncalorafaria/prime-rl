@@ -22,7 +22,7 @@ port = 8000
 [model]
 enforce_eager = true
 name = "Qwen/Qwen3.5-2B"
-max_model_len = 1024
+max_model_len = 8192
 dtype = "bfloat16"
 trust_remote_code = true
 tool_call_parser = "qwen3_coder"
@@ -34,7 +34,7 @@ dp = 1
 
 [vllm_extra]
 language_model_only = true
-max_num_batched_tokens = 4096
+max_num_batched_tokens = 8192
 max_num_seqs = 16
 
 [env_vars]

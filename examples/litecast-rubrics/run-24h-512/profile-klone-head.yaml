@@ -1,0 +1,16 @@
+time_limit: '48:00:00'
+cpus_per_task: 4
+tasks_per_node: 1
+memory: 16G
+apptainer_binary: /gscratch/ark/graf/rexs/deploy/klone/apptainer-klone
+image_cache: /tmp/litecast-rexs-images
+image_dir: /gscratch/ark/graf/rexs/deploy/klone/images
+dataset_root: /gscratch/ark/graf/data
+run_root: /gscratch/ark/graf/prime-rl-shardcast/outputs/rexs-runs
+images:
+  litecast-runtime: /gscratch/ark/graf/vllm-openai_latest-cu129-ubuntu2404.sif
+account: ckpt-ark
+partition: ckpt-all
+qos: ckpt
+sbatch:
+  no-requeue: true

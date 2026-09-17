@@ -1,0 +1,140 @@
+max_steps = 400
+output_dir = "outputs/litecast-signed-quokka9b"
+
+[wandb]
+project = "rubric-rl"
+name = "qwen35-4b-signed-quokka9b"
+tags = [
+    "litecast",
+    "signed-rubrics",
+    "quokka9b",
+    "lora",
+]
+entity = "graf"
+
+[deployment]
+type = "single_node"
+num_train_gpus = 1
+num_infer_gpus = 0
+
+[model]
+name = "Qwen/Qwen3.5-4B"
+
+[trainer]
+enable_token_export = true
+
+[trainer.model]
+compile = "None"
+fsdp_cpu_offload = false
+optim_cpu_offload = false
+ac_offloading = "None"
+seq_len = 131072
+attn = "flash_attention_2"
+impl = "auto"
+cp = 1
+
+[trainer.model.ac]
+mode = "full"
+freq = 1
+
+[trainer.model.lora]
+rank = 32
+alpha = 64
+dropout = 0.0
+target_modules = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+]
+
+[trainer.loss]
+type = "default"
+aggregation = "group_token_mean"
+kl_tau = 0.001
+
+[trainer.optim]
+type = "adamw"
+lr = 4e-06
+max_norm = 1.0
+weight_decay = 0.0
+eps = 1e-10
+betas1 = 0.95
+betas2 = 0.95
+
+[orchestrator]
+batch_size = 128
+group_size = 8
+seq_len = 32768
+max_off_policy_steps = 4
+oversampling_factor = 2.0
+max_inflight_episodes = 256
+collect_inference_metrics = false
+eval_max_inflight_episodes = 128
+
+[orchestrator.model.lora]
+name = "signed-rubrics-4b"
+rank = 32
+alpha = 64
+
+[orchestrator.model.client]
+base_url = [
+    "http://registry-host:1212/v1",
+]
+
+[orchestrator.model.client.litecast]
+registry = "redis://registry-host:6379/0"
+run_id = "litecast-toy"
+origin_host = "trainer-host"
+origin_port = 8201
+min_replicas = 1
+retain_versions = 6
+transport = "http"
+
+[orchestrator.train.sampling]
+max_completion_tokens = 16384
+temperature = 1.0
+top_p = 0.97
+
+[orchestrator.train.sampling.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[[orchestrator.train.source]]
+name = "rubrichub-signed-train"
+
+[orchestrator.train.source.legacy]
+id = "primebeaker.environments.jtc_rubrichub_judge_env"
+
+[orchestrator.train.source.legacy.args]
+dataset = "/gscratch/ark/graf/data/rubrichub-signed-penalties-20260917/hf"
+split = "train"
+judge_model_path = "s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400"
+judge_server_url = "http://JUDGE_GATEWAY_REQUIRED/judge"
+judge_service_model_path = "signed-quokka9b-judge"
+judge_timeout = 1800
+judge_max_retries = 1
+max_rubrics = 8
+rubric_sample_seed = 73352
+non_termination_penalty = -1.25
+invalid_output_penalty = -1.25
+orphan_think_close_penalty = -0.2
+
+[orchestrator.renderer]
+name = "qwen3.5"
+enable_thinking = true
+
+[weight_broadcast]
+type = "filesystem"
+
+[ckpt]
+interval = 50
+keep_last = 1
+
+[log]
+level = "info"
+
+[rollout_transport]
+type = "filesystem"

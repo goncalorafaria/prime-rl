@@ -1,0 +1,17 @@
+time_limit: 04:00:00
+cpus_per_task: 16
+tasks_per_node: 1
+memory: 64G
+apptainer_binary: /gscratch/ark/graf/rexs/deploy/klone/apptainer-klone
+image_cache: /tmp/litecast-rexs-images
+image_dir: /gscratch/ark/graf/rexs/deploy/klone/images
+dataset_root: /gscratch/ark/graf/data
+run_root: /gscratch/ark/graf/prime-rl-shardcast/outputs/rexs-runs
+images:
+  litecast-runtime: /gscratch/ark/graf/vllm-openai_latest-cu129-ubuntu2404.sif
+account: ckpt-ark
+partition: ckpt-all
+qos: ckpt
+sbatch:
+  no-requeue: true
+  exclude: g3004,g3006,g3015,g3016,g3026,g3027,g3030,g3031,g3032,g3033,g3034,g3035,g3036,g3037,g3043,g3044,g3045,g3046,g3047,g3050,g3051,g3052,g3053,g3054,g3057,g3060,g3061,g3062,g3063,g3064,g3065,g3066,g3067,g3070,g3071,g3072,g3073,g3074,g3075,g3076,g3077,g3080,g3081,g3082,g3083,g3084,g3085,g3086,g3087,g3090,g3091,g3092,g3093,g3094,g3095,g3096,g3097,g3098,g3099,g3100,g3101,g3102,g3103,g3104,g3105,g3106,g3107,g3108,g3109,g3110,g3111,g3112,g3113,g3114,g3115,g3116,g3117,g3118,g3119,g3120,g3121,g3122,g3123,g3124,g3125,g3126,g3127,g3128,g3129,g3130,g3131,g3132,g3133,g3134,g3135,g3136,g3137,z3001,z3005,z3006

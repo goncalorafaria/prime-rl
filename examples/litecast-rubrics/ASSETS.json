@@ -1,0 +1,14 @@
+{
+  "dataset": {
+    "local_path": "/gscratch/ark/graf/data/batchrubrics/rl_datadev_7ef8249d31225b43/active-rl",
+    "source": "s3://gfaria-ai2-transfer/batchrubrics/data/rl_datadev_7ef8249d31225b43/active-rl/",
+    "manifest_checksums_verified": 9,
+    "train_rows_manifest": 8000,
+    "validation_rows_manifest": 800
+  },
+  "checkpoint": {
+    "local_path": "/gscratch/ark/graf/data/batchrubrics/models/sloth2b-sft-step400",
+    "source": "s3://gfaria-ai2-transfer/prime_sft/outputs/sloth_v2_qwen35_2b_quokka_step200_articulated_submit_multirubric_wildguard_20k_32k_lr2e-5_400steps/weights/step_400/",
+    "verification": "S3 object sizes and safetensors header/data extent; no upstream cryptographic manifest available"
+  }
+}

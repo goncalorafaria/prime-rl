@@ -62,6 +62,7 @@ class PrimeRlGenerateResponse(GenerateResponse):
     # router can extract per-run token counts (and cached-prefix tokens) for
     # platform billing — see https://github.com/PrimeIntellect-ai/router/pull/43.
     usage: UsageInfo | None = None
+    hybrid_lora_lineage: dict[str, Any] | None = None
 
 
 class _GenerateRoutedExpertsCapture(RoutedExpertsCapture):
@@ -182,6 +183,10 @@ class PrimeRlServingTokens(ServingTokens):
         # to ``max_model_len - prompt_len`` when the caller didn't set it; and
         # (c) dispatch to our overridden response builder so ``routed_experts``
         # makes it into the JSON.
+        from prime_rl.inference.vllm.hybrid_lora import enabled
+
+        if enabled() and (request.stream or request.sampling_params.n != 1):
+            return self.create_error_response("Hybrid LoRA requires non-streaming requests with n=1 for lineage")
         error_check_ret = await self._check_model(request)
         if error_check_ret is not None:
             return error_check_ret
@@ -353,4 +358,10 @@ class PrimeRlServingTokens(ServingTokens):
         if final_capture.final_res is not None:
             response.usage = _build_usage(final_capture.final_res)
 
+        from prime_rl.inference.vllm.hybrid_lora import enabled
+
+        if enabled():
+            response.hybrid_lora_lineage = await self.engine_client.engine_core.call_utility_async(
+                "hybrid_lineage", request_id, True
+            )
         return response

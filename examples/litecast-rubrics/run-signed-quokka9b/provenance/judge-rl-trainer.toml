@@ -1,0 +1,152 @@
+output_dir = "/weka/gfaria/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400"
+matmul_precision = "high"
+max_steps = 400
+enable_router_replay = false
+dist_timeout_seconds = 3600
+max_concurrent_runs = 1
+enable_token_export = true
+
+[model]
+name = "/weka/gfaria/prime_sft/outputs/quokka_sft_qwen35_9b_base_rltracer_16k_xmlv1_searchsourcecriteria_v3_32k_lr1e-5_200steps-retry1/weights/step_200"
+trust_remote_code = false
+seq_len = 131072
+attn = "flash_attention_2"
+fsdp_cpu_offload = false
+optim_cpu_offload = false
+reshard_after_forward = true
+dp_replicate = 1
+ep = "auto"
+ep_comm_backend = "torch"
+deepep_num_sms = 20
+cp = 1
+cp_style = "ring"
+impl = "custom"
+optimization_dtype = "bfloat16"
+reduce_dtype = "bfloat16"
+moe_router_dtype = "float32"
+moe_use_grouped_mm = true
+freeze_moe_router = false
+fused_lm_head_token_chunk_size = 1024
+
+[model.compile]
+fullgraph = false
+
+[model.ac]
+mode = "full"
+freq = 1
+targets = [
+    "norm",
+]
+
+[model.ac_offloading]
+pin_memory = true
+max_inflight_activations = 5
+
+[model.debug]
+random_init = false
+force_balanced_routing = false
+
+[tokenizer]
+name = "/weka/gfaria/prime_sft/outputs/quokka_sft_qwen35_9b_base_rltracer_16k_xmlv1_searchsourcecriteria_v3_32k_lr1e-5_200steps-retry1/weights/step_200"
+trust_remote_code = false
+
+[data]
+
+[loss]
+type = "default"
+dppo_mask_low = 0.2
+dppo_mask_high = 0.2
+adv_tau = 1.0
+kl_tau = 0.001
+
+[optim]
+lr = 4e-06
+weight_decay = 0.0
+max_norm = 1.0
+type = "adamw"
+eps = 1e-08
+betas1 = 0.95
+betas2 = 0.95
+
+[scheduler]
+type = "constant"
+
+[ckpt]
+interval = 25
+skip_gather_master_weights = false
+weights_only = false
+resume_step = -1
+keep_last = 40
+skip_progress = false
+skip_scheduler = false
+skip_dataloader = false
+skip_optimizer = false
+
+[ckpt.weights]
+save_sharded = true
+save_format = "safetensors"
+save_adapter_separately = false
+
+[weight_broadcast]
+host = "0.0.0.0"
+port = 29501
+timeout = 1200
+inference_world_size = 6
+type = "nccl"
+quantize_in_weight_transfer = false
+
+[rollout_transport]
+type = "zmq"
+host = "localhost"
+port = 5555
+hwm = 10
+
+[log]
+level = "info"
+vf_level = "info"
+json_logging = false
+log_data = false
+interval = 10.0
+ranks_filter = [
+    0,
+]
+
+[wandb]
+project = "rubric-rl"
+name = "quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400"
+tags = [
+    "quokka",
+    "jtc",
+    "datadev",
+    "rltracer",
+    "prime-rl",
+    "qwen3.5",
+    "9b",
+    "sft-step200",
+    "xml-v1",
+    "search-source-criteria",
+    "rlmix-ba8d071f1b4046ae",
+    "search-25pct",
+    "base-quokka-formula-75pct",
+    "per-source-pass-fail-balanced",
+    "minimal-sft-prompt-reuse",
+    "output-chars-power-1p5",
+    "mandatory-15k-chars",
+    "local-search-bc-v2-72k",
+    "browser-aware-terminal",
+    "saved-web-assets",
+    "no-oversampling",
+    "lr-4e-6",
+    "kl-tau-1e-3",
+    "betas-0.95-0.95",
+    "weight-decay-0",
+    "context-32k",
+    "max-tool-calls-64",
+    "400steps",
+]
+offline = false
+
+[gc]
+interval = 50
+
+[env_vars]

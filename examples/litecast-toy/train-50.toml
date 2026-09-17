@@ -22,7 +22,8 @@ compile = "None"
 # FSDP offloads parameters, gradients, and optimizer states together.
 fsdp_cpu_offload = true
 optim_cpu_offload = false
-seq_len = 1024
+# Pack multiple independent rollouts into each trainer sequence.
+seq_len = 4096
 attn = "auto"
 impl = "auto"
 

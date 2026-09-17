@@ -194,6 +194,9 @@ def custom_build_app(args: Namespace, supported_tasks: tuple, model_config=None)
     """
     app = _original_build_app(args, supported_tasks, model_config)
     app.include_router(router)
+    from prime_rl.inference.vllm.hybrid_lora import add_routes
+
+    add_routes(app)
     return app
 
 

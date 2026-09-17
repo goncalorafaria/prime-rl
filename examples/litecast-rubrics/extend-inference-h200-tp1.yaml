@@ -1,0 +1,7 @@
+resources:
+  gpuCount: 1
+  cpuCount: 16
+  memory: 128 GiB
+envVars:
+- name: LITECAST_INFERENCE_CONFIG
+  value: /mmfs1/gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/inference-h200-tp1.toml

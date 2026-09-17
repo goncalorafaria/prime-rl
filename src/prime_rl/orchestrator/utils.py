@@ -3,6 +3,7 @@ import ctypes
 import gc
 import logging
 import math
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -77,6 +78,14 @@ def setup_env_server_logging(log_level: str, json_logging: bool = False) -> None
     their per-rollout logs."""
     setup_logger(log_level, json_logging=json_logging)
     intercept_vf_logging(logger="verifiers.v1", level=log_level)
+    if os.getenv("LITECAST_PROMPT_AFFINITY") == "1":
+        from prime_rl.litecast.affinity import install_prompt_affinity
+
+        install_prompt_affinity()
+    if os.getenv("LITECAST_INFLIGHT_UPDATES") == "1":
+        from prime_rl.litecast.lineage import install_lineage_tracking
+
+        install_lineage_tracking()
 
 
 def set_default_executor(max_workers: int = 64) -> None:

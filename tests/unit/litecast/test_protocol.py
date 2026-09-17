@@ -37,3 +37,31 @@ def test_names_isolate_runs_and_versions():
     assert Publication(**json.loads(json.dumps(a.to_dict()))) == a
     with pytest.raises(ValueError):
         base_alias("../escape")
+
+
+def test_hybrid_cache_shares_only_matching_histories():
+    from prime_rl.inference.vllm.hybrid_lora import cache_namespace
+
+    v7 = [{"version": "v7", "computed_tokens": 0, "output_tokens": 0}]
+    hybrid = v7 + [{"version": "v8", "computed_tokens": 1024, "output_tokens": 32}]
+    assert cache_namespace("tenant", "A", v7) == cache_namespace("tenant", "A", list(v7))
+    assert cache_namespace("tenant", "A", v7) != cache_namespace("tenant", "B", v7)
+    assert cache_namespace("tenant", "A", v7) != cache_namespace("other", "A", v7)
+    assert cache_namespace("tenant", "A", hybrid) != cache_namespace("tenant", "A", v7)
+    assert cache_namespace("tenant", "A", hybrid) != cache_namespace("tenant", "A", [{"version": "v8", "computed_tokens": 0, "output_tokens": 0}])
+    other_boundary = v7 + [{"version": "v8", "computed_tokens": 1040, "output_tokens": 48}]
+    assert cache_namespace("tenant", "A", hybrid) != cache_namespace("tenant", "A", other_boundary)
+
+
+def test_live_lineage_rejects_missing_or_invalid_token_history():
+    from prime_rl.litecast.lineage import validate_lineage
+    record = {'semantics':'retained_state','output_tokens':10,
+              'segments':[{'output_start':0,'version':'v7'},{'output_start':4,'version':'v8'}]}
+    validate_lineage(record,10)
+    with pytest.raises(ValueError):
+        validate_lineage(None,10)
+    with pytest.raises(ValueError):
+        validate_lineage(record,9)
+    record['segments'][1]['output_start']=11
+    with pytest.raises(ValueError):
+        validate_lineage(record,10)

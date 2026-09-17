@@ -1,0 +1,47 @@
+enable_token_export = false
+
+[model]
+compile = "None"
+fsdp_cpu_offload = true
+optim_cpu_offload = false
+seq_len = 131072
+attn = "auto"
+impl = "auto"
+cp = 8
+cp_style = "ulysses"
+
+[model.ac]
+mode = "full"
+freq = 1
+
+[model.ac_offloading]
+max_inflight_activations = 2
+pin_memory = true
+
+[model.lora]
+rank = 8
+alpha = 16
+dropout = 0.0
+target_modules = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+]
+
+[loss]
+type = "default"
+aggregation = "group_token_mean"
+kl_tau = 0.001
+
+[optim]
+type = "adamw"
+lr = 2e-06
+max_norm = 1.0
+weight_decay = 0.0
+eps = 1e-10
+betas1 = 0.95
+betas2 = 0.95

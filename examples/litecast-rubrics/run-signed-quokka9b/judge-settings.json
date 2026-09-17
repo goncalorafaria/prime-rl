@@ -1,0 +1,8 @@
+{
+  "model": "s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400",
+  "service": "signed-quokka9b-judge",
+  "mode": "per_rubric",
+  "tools": [
+    "webterminal"
+  ]
+}

@@ -181,3 +181,70 @@ PRIME-RL::Launcher
 ```
 
 For multi-node runs, trainer and inference processes are on separate nodes — use `srun` or `ssh` to inspect them.
+
+### LiteCast policy wakeups
+
+If the trainer waits for a batch while rollout counters freeze, compare the last
+`Holding batch` message with the last completed LiteCast policy update. LiteCast
+advances `policy.version` after replica acknowledgement; `on_version_pending`
+can wake a batch waiter too early. `on_new_version` must also set
+`version_advanced`, or a held batch can sleep indefinitely and back up the bounded
+dispatcher output queue. Running jobs need recovery to load a source fix; do not
+restart just to diagnose this condition.
+
+For long non-streaming generations, the LiteCast sidecar request timeout must
+match the gateway capacity config. The worker CLI default is only 300 seconds;
+the toy/rubrics launcher now passes `request_timeout_seconds` explicitly.
+Sidecars cancel upstream requests on caller disconnect and report backend header
+timeouts as HTTP 504 while releasing admission slots. A healthy `/health` with
+`httpx.ReadTimeout` generation traces does not mean the worker process died.
+
+### Rex restart-budget shutdowns
+
+Check the experiment event that triggered cleanup before attributing relay errors
+to a head failure. Group8 run a0b0bc72 recovered its 17:08 head timeout, restored
+Redis at 17:10, and trained until step154. At 21:07 an H200 inference replica
+exhausted ten restarts; Rex cancelled the head then trainer. For this fleet, use
+`action: restart` with `max_restarts: null` on all non-trainer services (requires
+Rex unlimited-restart support); keep trainer `fail_experiment`. Finite budgets
+remain experiment-fatal. Relaunches must verify this in the submitted spec.
+
+### LiteCast head and registration recovery
+
+SQLite head discovery is shared by many allocations. Opening an initialized
+registry must remain read-only; close SQLite connections explicitly after each
+operation. Endpoint heartbeat writers retry transient lock/I/O errors and log a
+missed refresh without terminating an otherwise healthy service. Persistent
+failures still expire endpoint discovery and require investigation.
+
+Keep each asynchronous registry client on one event loop for its entire lifetime,
+including registration, heartbeat, Redis replacement, and shutdown. Calling
+`asyncio.run` separately for successive heartbeats can leave Redis connections
+bound to a closed loop and permanently stop model registration.
+
+The Klone runtime and model-service launchers load the shared
+`/gscratch/ark/graf/literegistry-core` source ahead of installed container copies.
+Check this import path before assuming a source fix reached a deployment;
+already-running processes require a restart to load it. JTC soft-affinity
+lookup/write failures are logged and bounded to two seconds per operation;
+metadata failure must not discard a successful model response.
+
+Run focused LiteCast regression tests with `pytest --noconftest` inside shared
+allocations. The general test conftest has process-killing cleanup fixtures and
+must not run alongside live training or inference processes. Recovery checks
+should replace a real Redis backend and verify registration in the new backend,
+rather than querying a client that can retain cached discovery.
+
+Judge GPU allocations run only the model-service wrapper and vLLM. The wrapper
+registers each healthy replica directly with the shared head; it does not need a
+local inference gateway. The judge API allocation owns the gateway used by its
+model and tool workflows. Readiness must check the individual model before
+registration, not whether some replica of the model exists in discovery.
+
+For signed-rubric runs, judge conversations are embedded in policy trace
+`info.jtc_rubrichub_judge.judgments[*].trace.messages`. The example’s
+`export-judge-split.py` builds live `policy`/`judge` viewer splits. Point it at
+`training/run_default/rollouts`; `training/rollouts` can exist but be empty.
+Use file symlinks for derived policy views because recursive Path.glob does
+not descend through directory symlinks. Verify `/api/splits` and a judge
+trajectory with tool responses before reporting the view ready.

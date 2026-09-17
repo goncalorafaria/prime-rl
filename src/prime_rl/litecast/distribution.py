@@ -4,8 +4,10 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import random
 import tempfile
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,7 +16,8 @@ from literegistry import RegistryClient, get_kvstore
 from literegistry.registry import ServerRegistry
 from redis.exceptions import RedisError
 
-from litecast import ClientNode, OriginServer
+from litecast import OriginServer
+from prime_rl.litecast.transfer import MeasuredClient
 from prime_rl.litecast.protocol import Publication, desired_key, pack_adapter, peer_service
 
 logger = logging.getLogger(__name__)
@@ -51,6 +54,9 @@ class Publisher:
         self.fenced = False
         self.owner = uuid4().hex
         self.redis = redis.from_url(config.registry) if config.registry.startswith(("redis://", "rediss://")) else None
+        if config.registry.startswith(("head+", "head://")):
+            from prime_rl.litecast.bootstrap import HeadRedisCommands
+            self.redis = HeadRedisCommands(self.store)
         self.task = None
         self.refresh_lock = asyncio.Lock()
 
@@ -179,8 +185,11 @@ class Publisher:
             and "litecast_transfer" in r.get("metadata", {})
         ]
         metrics = {"litecast/measured_replicas": float(len(samples))}
-        for field in ("fetch_seconds", "load_seconds"):
-            values = [sample[field] for sample in samples]
+        for field in ("fetch_seconds", "load_seconds", "discovery_seconds", "manifest_seconds",
+                      "download_seconds", "relay_wait_seconds", "cached_metadata_seconds", "publication_verify_seconds", "http_attempt_seconds_sum",
+                      "http_failed_seconds_sum", "retry_gap_seconds_sum", "http_attempts", "http_retries",
+                      "http_failures", "http_bytes", "sources_used", "source_group_size", "source_group_failures"):
+            values = [sample[field] for sample in samples if field in sample]
             if values:
                 metrics[f"litecast/{field}_mean"] = sum(values) / len(values)
                 metrics[f"litecast/{field}_max"] = max(values)
@@ -206,31 +215,66 @@ class Publisher:
 
 
 async def fetch_publication(
-    publication: Publication, registry, output_dir: Path, transport: str, source_role: str | None = None
+    publication: Publication, registry, output_dir: Path, transport: str, source_role: str | None = None,
+    metrics: dict | None = None,
 ) -> bytes:
+    started = time.perf_counter()
     records = (await registry.models(force=True)).get(peer_service(publication.run_id, publication.digest), [])
+    discovery_seconds = time.perf_counter() - started
+    relay_wait_started = time.perf_counter()
+    relay_deadline = relay_wait_started + max(0, float(os.getenv('LITECAST_RELAY_WAIT_SECONDS', '0')))
+    while (records and source_role is None
+           and not any(r.get('metadata', {}).get('source_role') != 'origin' for r in records)
+           and time.perf_counter() < relay_deadline):
+        await asyncio.sleep(min(0.25, max(0, relay_deadline-time.perf_counter())))
+        records = (await registry.models(force=True)).get(peer_service(publication.run_id, publication.digest), [])
+    relay_wait_seconds = time.perf_counter() - relay_wait_started
     if source_role is not None:
         records = [r for r in records if r.get("metadata", {}).get("source_role") == source_role]
     random.shuffle(records)
-    # Spread load across peers first; origins participate in the same discovery
-    # protocol. There is deliberately no address fallback outside LiteRegistry.
-    records.sort(key=lambda record: record.get("metadata", {}).get("source_role") == "origin")
-    candidates = [
-        (record["uri"], record["metadata"]["litecast_version"])
-        for record in records
-        if record.get("uri") and record.get("metadata", {}).get("litecast_version")
-    ]
-    for server, version in candidates:
-        client = ClientNode([server], str(output_dir), transport=transport, max_version_bytes=publication.size)
+    groups = {}
+    for record in records:
+        metadata = record.get('metadata', {})
+        server, version = record.get('uri'), metadata.get('litecast_version')
+        if server and version:
+            # A peer rebroadcast can use a different local version name.
+            key = (metadata.get('source_role', 'peer'), version)
+            groups.setdefault(key, set()).add(server)
+    candidates = sorted(groups.items(), key=lambda item: (
+        {'middle': 0, 'peer': 1, 'origin': 2}.get(item[0][0], 1), -len(item[1])))
+    totals = {'discovery_seconds': discovery_seconds, 'relay_wait_seconds': relay_wait_seconds, 'source_candidates': len(records),
+              'source_group_failures': 0, 'publication_verify_seconds': 0.0}
+    for (role, version), servers in candidates:
+        client = MeasuredClient(sorted(servers), str(output_dir), transport=transport,
+                                max_version_bytes=publication.size)
+        logger.info('LITECAST_TRANSFER_SOURCES model=%s role=%s version=%s sources=%s',
+                    publication.model_name, role, version, sorted(servers))
         try:
             payload = await blocking(client.download_version_buffer, version)
             if payload is None:
-                continue
+                raise RuntimeError('shard download or checksum verification failed')
             payload = bytes(payload)
-            publication.verify(payload)
+            verify_started = time.perf_counter()
+            try:
+                publication.verify(payload)
+            finally:
+                totals['publication_verify_seconds'] += time.perf_counter() - verify_started
+            if metrics is not None:
+                metrics.update(source_group_size=len(servers))
             return payload
         except (OSError, ValueError, RuntimeError) as exc:
-            logger.warning("LiteCast source %s failed: %s", server, exc)
+            totals['source_group_failures'] += 1
+            logger.warning('LiteCast sources %s failed: %s', sorted(servers), exc)
         finally:
+            sample = client.measurements()
+            for key, value in sample.items():
+                if key == 'sources_used':
+                    totals[key] = max(totals.get(key, 0), value)
+                else:
+                    totals[key] = totals.get(key, 0) + value
             client.close()
+            totals['fetch_seconds'] = time.perf_counter() - started
+            logger.info('LITECAST_FETCH_TIMING model=%s metrics=%s', publication.model_name, totals)
+            if metrics is not None:
+                metrics.update(totals)
     raise RuntimeError(f"no valid LiteCast source for {publication.model_name}")

@@ -956,6 +956,9 @@ class Orchestrator:
         re-evaluate the dispatch gate (may resume if the trainer caught up)."""
         if self.model_express is not None:
             await asyncio.to_thread(self.model_express.set_status, p2p_pb2.SOURCE_STATUS_INITIALIZING)
+        # LiteCast advances policy.version only after replicas acknowledge the
+        # update. Wake batch shippers again now that the version is usable.
+        self.version_advanced.set()
         self.update_dispatch_gate()
 
     async def stop(self) -> None:

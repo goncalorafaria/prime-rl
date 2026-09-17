@@ -1,0 +1,42 @@
+version: v2
+description: h200tp2 retained-state LoRA and prefix cache acceptance, no DCP
+tasks:
+- name: preflight
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - check
+  - /gscratch/ark/graf/prime-rl-shardcast/outputs/check-next-tp.py
+  resources:
+    gpuCount: 2
+    cpuCount: 32
+    memory: 256 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src
+  - name: OMP_NUM_THREADS
+    value: '4'
+  - name: PRIME_RL_HYBRID_LORA
+    value: '1'
+  - name: LITECAST_CHECK_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/inference-h200-tp2.toml
+  - name: LITECAST_CHECK_OUTPUT_TOKENS
+    value: '1024'
+  result:
+    path: /tmp/litecast-result
+rexs:
+  allocations:
+  - name: preflight
+    tasks:
+    - preflight
+    profile: ../litecast-rubrics/profile-klone-inference-h200-tp2.yaml
+  completion_task: preflight
+  failure_policies:
+    preflight:
+      action: fail_experiment

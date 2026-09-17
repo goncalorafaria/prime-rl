@@ -75,7 +75,7 @@ def engine(base_model="test-2b"):
 
 
 @pytest.mark.asyncio
-async def test_publish_gateway_late_join_preemption_and_expiry(tmp_path, monkeypatch):
+async def test_publish_gateway_late_join_preemption_and_expiry(tmp_path, monkeypatch, caplog):
     registry = f"file://{tmp_path / 'registry'}"
     config = SimpleNamespace(
         registry=registry,
@@ -117,9 +117,17 @@ async def test_publish_gateway_late_join_preemption_and_expiry(tmp_path, monkeyp
     monkeypatch.setenv("REGISTRY_PATH", registry)
     monkeypatch.setenv("GATEWAY_REGISTER", "false")
     monkeypatch.setenv("REGISTRY_CACHE_TTL_SECONDS", "0")
+    await publisher.start()
+    worker = make_worker(backend_port)
+    with caplog.at_level("INFO", logger="prime_rl.litecast.worker"):
+        await worker.reconcile()
+        await worker.reconcile()
+    assert not worker.available(base_alias(config.run_id))
+    assert not worker.serving
+    assert caplog.text.count("LITECAST_BACKEND_STARTING") == 1
+    assert f"http://127.0.0.1:{backend_port}/health" in caplog.text
+    assert not any(record.exc_info for record in caplog.records)
     async with serve(engine(), backend_port), serve(gateway_app(enable_registration=False), gateway_port):
-        await publisher.start()
-        worker = make_worker(backend_port)
         async with serve(create_app(worker), worker.args.port):
             await publisher.wait_ready(base_alias(config.run_id), 10)
             directory = tmp_path / "adapter"

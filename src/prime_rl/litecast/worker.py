@@ -18,8 +18,10 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from literegistry import RegistryClient, get_kvstore
 from literegistry.registry import ServerRegistry
+from starlette.responses import JSONResponse
 
 from litecast import OriginServer
+from prime_rl.litecast import inflight as live_updates
 from prime_rl.litecast.distribution import blocking, fetch_publication
 from prime_rl.litecast.protocol import (
     Publication,
@@ -29,7 +31,7 @@ from prime_rl.litecast.protocol import (
     split_adapter,
     validate_run_id,
 )
-from prime_rl.litecast.responses import GENERATION_PATHS, ManagedStreamingResponse
+from prime_rl.litecast.responses import GENERATION_PATHS, DisconnectCancellationMiddleware, ManagedStreamingResponse
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,9 @@ class Worker:
         self.peers: dict[str, tuple[ServerRegistry, str]] = {}
         self.inflight: dict[str, int] = {}
         self.last_healthy = float("-inf")
+        self.backend_seen_healthy = False
+        self.backend_unavailable_since = None
+        self.backend_last_warning = float("-inf")
         self.task = None
 
     def available(self, model_name):
@@ -96,13 +101,46 @@ class Worker:
             for p in publications
         ):
             raise ValueError("invalid publication for this worker")
-        response = await self.backend.get("/health")
-        response.raise_for_status()
-        model_response = await self.backend.get("/v1/models")
-        model_response.raise_for_status()
+        try:
+            response = await self.backend.get("/health")
+            response.raise_for_status()
+            model_response = await self.backend.get("/v1/models")
+            model_response.raise_for_status()
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            self.last_healthy = float("-inf")
+            now = time.monotonic()
+            if self.backend_unavailable_since is None:
+                self.backend_unavailable_since = now
+                self.backend_last_warning = float("-inf")
+            elapsed = now - self.backend_unavailable_since
+            if now - self.backend_last_warning >= 30:
+                log = logger.warning if self.backend_seen_healthy or elapsed >= 60 else logger.info
+                log(
+                    "LITECAST_BACKEND_%s run_id=%s endpoint=%s elapsed_seconds=%.1f error=%s; retrying",
+                    "UNAVAILABLE" if self.backend_seen_healthy else "STARTING",
+                    self.args.run_id,
+                    exc.request.url,
+                    elapsed,
+                    str(exc) or type(exc).__name__,
+                )
+                self.backend_last_warning = now
+            await self.withdraw()
+            return
         backend_models = {item["id"] for item in model_response.json()["data"]}
         if self.args.base_model not in backend_models:
             raise ValueError("backend does not serve the configured base model")
+        if not self.backend_seen_healthy or self.backend_unavailable_since is not None:
+            logger.info(
+                "LITECAST_BACKEND_READY run_id=%s endpoint=%s wait_seconds=%.1f",
+                self.args.run_id,
+                self.args.backend_url,
+                0.0 if self.backend_unavailable_since is None else time.monotonic() - self.backend_unavailable_since,
+            )
+        self.backend_seen_healthy = True
+        self.backend_unavailable_since = None
+        if live_updates.enabled():
+            await live_updates.reconcile(self, publications, backend_models)
+            return
         # A vLLM process can restart while the sidecar survives. Forget all
         # readiness before attempting to reload any adapter missing upstream.
         for name in list(self.loaded):
@@ -138,12 +176,14 @@ class Worker:
                     response = await self.backend.post("/v1/unload_lora_adapter", json={"lora_name": name})
                     response.raise_for_status()
                 fetch_started = time.perf_counter()
+                transfer_details = {}
                 payload = await fetch_publication(
                     publication,
                     self.registry,
                     self.root,
                     self.args.transport,
                     source_role="middle" if getattr(self.args, "require_middle", False) else None,
+                    metrics=transfer_details,
                 )
                 fetch_seconds = time.perf_counter() - fetch_started
                 load_started = time.perf_counter()
@@ -165,6 +205,7 @@ class Worker:
                     shutil.rmtree(staging)
                     raise
                 self.transfer_metrics[name] = {
+                    **transfer_details,
                     "fetch_seconds": fetch_seconds,
                     "load_seconds": time.perf_counter() - load_started,
                     "payload_bytes": publication.size,
@@ -244,7 +285,7 @@ class Worker:
 class TenantPool:
     """Explicit trainer subscriptions sharing one admission budget and HTTP endpoint."""
 
-    def __init__(self, workers):
+    def __init__(self, workers, subscriptions=None):
         if not workers or len({w.args.run_id for w in workers}) != len(workers):
             raise ValueError("tenant run IDs must be nonempty and unique")
         backends = {}
@@ -254,6 +295,7 @@ class TenantPool:
                 raise ValueError("different base models require different backend URLs")
             backends[url] = worker.args.base_model
         self.workers = workers
+        self.subscriptions = subscriptions
         self.max_inflight_requests = workers[0].max_inflight_requests
         self.inflight = {}
         self.replica_id = uuid4().hex
@@ -274,7 +316,47 @@ class TenantPool:
         return self.owner(name) is not None
 
     async def run(self):
-        await asyncio.gather(*(worker.run() for worker in self.workers))
+        for worker in self.workers:
+            worker.task = asyncio.create_task(worker.run())
+        last_error = None
+        try:
+            while True:
+                if self.subscriptions:
+                    try:
+                        subscriptions = tenant_args(self.subscriptions)
+                        existing = {w.args.run_id: w for w in self.workers}
+                        incoming = {a.run_id: a for a in subscriptions}
+                        fields = ("base_model", "backend_url", "shard_port")
+                        if any(
+                            run not in incoming or any(getattr(w.args, f) != getattr(incoming[run], f) for f in fields)
+                            for run, w in existing.items()
+                        ):
+                            raise ValueError(
+                                "live tenant reload can only add subscriptions; existing tenants must stay unchanged"
+                            )
+                        for args in subscriptions:
+                            if args.run_id not in existing:
+                                worker = Worker(args)
+                                worker.inflight = self.inflight
+                                worker.replica_id = self.replica_id
+                                worker.max_inflight_requests = self.max_inflight_requests
+                                self.workers.append(worker)
+                                worker.task = asyncio.create_task(worker.run())
+                                logger.info("LITECAST_TENANT_ATTACHED run=%s replica=%s", args.run_id, self.replica_id)
+                        last_error = None
+                    except (OSError, ValueError) as exc:
+                        if str(exc) != last_error:
+                            logger.warning("LITECAST_TENANTS_REJECTED keeping_previous=true error=%s", exc)
+                            last_error = str(exc)
+                for worker in self.workers:
+                    if worker.task.done():
+                        await worker.task
+                        raise RuntimeError(f"tenant worker stopped: {worker.args.run_id}")
+                await asyncio.sleep(self.workers[0].args.poll_seconds)
+        finally:
+            for worker in self.workers:
+                worker.task.cancel()
+            await asyncio.gather(*(w.task for w in self.workers), return_exceptions=True)
 
     async def close(self):
         if self.task:
@@ -297,6 +379,8 @@ def tenant_args(args):
     items = json.loads(args.tenants.read_text())
     if not isinstance(items, list) or not items:
         raise ValueError("tenants must be a nonempty JSON list")
+    if len(items) > getattr(args, "max_tenants", 8):
+        raise ValueError("tenant count exceeds max-tenants")
     subscriptions = []
     runs, ports, backends = set(), set(), {}
     for item in items:
@@ -336,6 +420,7 @@ def create_app(worker: Worker | TenantPool):
             await worker.close()
 
     app = FastAPI(lifespan=lifespan)
+    app.add_middleware(DisconnectCancellationMiddleware)
 
     @app.get("/health")
     async def health():
@@ -370,12 +455,22 @@ def create_app(worker: Worker | TenantPool):
             )
         if name == base_alias(owner.args.run_id):
             payload["model"] = owner.args.base_model
+        if live_updates.enabled() and name != base_alias(owner.args.run_id):
+            if not name.endswith("-live") or endpoint != "/inference/v1/generate" or payload.get("stream"):
+                raise HTTPException(
+                    400, "Retained-state updates require a live alias and non-streaming token generation"
+                )
+            payload["model"] = base_alias(owner.args.run_id) + "-live"
         worker.inflight[name] = worker.inflight.get(name, 0) + 1
         try:
             upstream = await owner.backend.send(
                 owner.backend.build_request("POST", endpoint, json=payload),
                 stream=True,
             )
+        except httpx.TimeoutException as exc:
+            worker.inflight[name] -= 1
+            logger.warning("LITECAST_GENERATION_TIMEOUT replica=%s model=%s", owner.replica_id, name)
+            raise HTTPException(504, "inference backend timed out") from exc
         except BaseException:
             worker.inflight[name] -= 1
             raise
@@ -385,6 +480,15 @@ def create_app(worker: Worker | TenantPool):
                 await upstream.aclose()
             finally:
                 worker.inflight[name] -= 1
+
+        if live_updates.enabled() and name != base_alias(owner.args.run_id):
+            try:
+                await upstream.aread()
+                if upstream.is_error:
+                    return JSONResponse(upstream.json(), status_code=upstream.status_code)
+                return JSONResponse(live_updates.record_response(owner, upstream.json(), name))
+            finally:
+                await cleanup()
 
         return ManagedStreamingResponse(
             upstream.aiter_bytes(),
@@ -408,7 +512,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", default=os.getenv("REGISTRY"), required=not os.getenv("REGISTRY"))
     parser.add_argument("--run-id")
-    parser.add_argument("--tenants", type=Path, help="JSON trainer subscriptions; replaces run-id/base-model")
+    parser.add_argument("--tenants", type=Path, help="Reloadable JSON trainer subscriptions; supports live additions")
+    parser.add_argument("--max-tenants", type=int, default=8)
     parser.add_argument("--base-model")
     parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
     parser.add_argument("--advertise-host", required=True)
@@ -428,6 +533,7 @@ def main():
     if (
         min(
             args.max_inflight_requests,
+            args.max_tenants,
             args.max_versions,
             args.max_adapter_bytes,
             args.shard_bytes,
@@ -446,7 +552,7 @@ def main():
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO)
     workers = [Worker(subscription) for subscription in subscriptions]
-    worker = TenantPool(workers) if args.tenants else workers[0]
+    worker = TenantPool(workers, args) if args.tenants else workers[0]
     uvicorn.run(create_app(worker), host="0.0.0.0", port=args.port)
 
 

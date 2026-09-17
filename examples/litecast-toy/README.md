@@ -5,7 +5,7 @@ One unified Rex experiment runs three Qwen3.5-2B LoRA optimizer steps against
 computed correct reversal; no search service, terminal service or judge model
 is needed. This is a deterministic graded reward, not an LLM judge.
 
-Allocations: CPU head (Redis + gateway), two independent CPU middle nodes,
+Allocations: CPU head (Redis), trainer-local gateway, two independent CPU middle nodes,
 one A40 trainer/orchestrator and one A40 vLLM worker. The worker requires a
 registry-advertised middle source for adapter loads. LiteCast itself remains
 independent of LiteRegistry; `prime_rl.litecast.middle` owns discovery,
@@ -30,7 +30,7 @@ rexs submit examples/litecast-toy/experiment.yaml --strict --name litecast-toy
 The run uses its Rex experiment ID for the file-backed bootstrap namespace and
 LiteRegistry run ID. Small checkpoints, logs and token exports are under
 `outputs/toy-EXPERIMENT_ID`; model caches and temporary adapters use node-local
-`/tmp`. The head advertises dynamically selected Redis/gateway ports. All
+`/tmp`. The head advertises Redis in SQLite; the trainer publishes its local gateway address. All
 allocations use routable hostnames on the same cluster.
 
 Success requires actual optimizer steps and checkpoints, rollout rewards,
@@ -148,12 +148,13 @@ A replaced worker/middle rebuilds its cache from the current publisher.
 The head persists Redis AOF under the run's shared `redis/` directory. Redis uses
 `appendfsync everysec`; a host crash can lose the most recent second, and live
 publisher/worker heartbeats rebuild discovery metadata. The head publishes its
-current backend addresses in the shared file-backed bootstrap. Trainer-owned TCP
-relays expose stable Redis/gateway URLs and resolve the head on each connection,
-so clients reconnect after a head replacement changes hosts or ports. A dropped
-request can fail and require retry; recovery is not uninterrupted service.
-Adapter byte transfers remain direct through LiteCast, bypassing these relays.
-The relay is part of the trainer allocation: its failure is a trainer failure.
+current Redis address in a shared SQLite head registry (`head.sqlite3`). Each
+client follows that registry directly. The actual capacity gateway runs on the
+trainer and routes requests directly to selected services; there is no TCP relay
+for new runs. Atomic publisher ownership scripts follow Redis replacement through
+the same head-aware store. Requests interrupted by a head failure can still need
+retry. Existing file-bootstrap runs retain their launch wiring on allocation
+restart so they can rejoin the active experiment.
 Registry publication/readiness retries are bounded by the configured timeouts;
 recovery that exceeds them can still fail training.
 
@@ -165,7 +166,7 @@ layout; base-model identity checks reject a mismatched worker path.
 ## Per-replica request capacity
 
 New submissions set `LITECAST_CAPACITY_ENABLED=1` on head and inference tasks.
-The head then starts `prime_rl.litecast.gateway:create_app`, which uses LiteRegistry's
+The trainer starts `prime_rl.litecast.gateway:create_app`, which uses LiteRegistry's
 routing extension API. All implementation lives in the PrimeRL fork. The settings
 in `capacity.toml` allow 2 active HTTP generation requests per replica, 64 waiting
 requests at the gateway, and up to 120 seconds waiting for admission. The existing
@@ -257,11 +258,15 @@ only two concurrent requests per inference replica, with up to 64 queued.
 ## Higher inference concurrency
 
 `experiment-50-aggressive.yaml` uses four A40 inference replicas and the same
-50-step optimizer/batch settings. `train-50-aggressive.toml` allows 256 in-flight
-episodes (oversampling factor 2). `capacity-aggressive.toml` admits 16 requests per
+50-step optimizer/batch settings. `train-50-aggressive.toml` allows 128 in-flight
+episodes (oversampling factor 1). `capacity-aggressive.toml` admits 16 requests per
 replica and queues up to 256 requests for at most 300 seconds.
-`inference-aggressive.toml` permits 16 sequences and 4096 scheduled tokens per
-vLLM iteration. The context limit remains 1024 and generation limit remains 256.
+`inference-aggressive.toml` permits 16 sequences and 8192 scheduled tokens per
+vLLM iteration. The four-replica variant uses a 131072-token trainer packing
+length and an 8192-token orchestrator/rollout and vLLM context. The completion
+budget is 8192 tokens, with generation stopping at the 8192-token total context
+limit (prompt included). Inference requests have a 1200-second timeout. The baseline `train-50.toml` uses trainer packing
+length 4096 and rollout context 1024. Packing combines independent rollouts into larger trainer microbatches.
 
 The role launcher accepts `LITECAST_INFERENCE_CONFIG` and
 `LITECAST_CAPACITY_CONFIG` alongside `LITECAST_TRAIN_CONFIG`. These settings are
@@ -318,3 +323,9 @@ The runtime launcher removes only the fakeroot library from child-process
 `LD_PRELOAD` after staging. Hundreds of concurrent SDK imports otherwise contend
 on fakeroot's metadata semaphore. Other preload libraries are preserved; image
 setup still uses the site wrapper. Existing running processes are unaffected.
+
+`experiment-50-p2p.yaml` enables peer fetching with `LITECAST_REQUIRE_MIDDLE=0`.
+Workers discover cached inference peers, middles, and the origin through
+LiteRegistry, preferring non-origin sources. The default toy launcher keeps
+`--require-middle` for middle-only transfer checks. This is HTTP peer transfer;
+it does not enable UCXX or establish RDMA performance.

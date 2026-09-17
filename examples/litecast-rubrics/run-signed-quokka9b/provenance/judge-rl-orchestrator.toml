@@ -1,0 +1,337 @@
+pre_batch_filters = [
+    { type = "gibberish", enforce = false, token_id_threshold = 100000, logprob_offset = 2.0 },
+    { type = "repetition", enforce = false, window = 3000, prob_threshold = 0.99 },
+    { type = "zero_advantage", enforce = false },
+]
+post_batch_filters = [
+    { type = "gibberish", enforce = false, token_id_threshold = 100000, logprob_offset = 2.0 },
+    { type = "repetition", enforce = false, window = 3000, prob_threshold = 0.99 },
+    { type = "zero_advantage", enforce = true },
+]
+collect_inference_metrics = true
+output_dir = "/weka/gfaria/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/run_default"
+batch_size = 128
+oversampling_factor = 1.0
+max_inflight_episodes = 128
+eval_max_inflight_episodes = 160
+group_size = 16
+seq_len = 32768
+num_train_workers = 2
+max_steps = 400
+max_off_policy_steps = 4
+bench = false
+
+[algo]
+type = "grpo"
+
+[algo.sampling]
+source = "policy"
+
+[model]
+name = "/weka/gfaria/prime_sft/outputs/quokka_sft_qwen35_9b_base_rltracer_16k_xmlv1_searchsourcecriteria_v3_32k_lr1e-5_200steps-retry1/weights/step_200"
+trust_remote_code = false
+
+[model.client]
+wait_for_ready_timeout = 1800
+base_url = [
+    "http://localhost:8000/v1",
+]
+api_key_var = "VLLM_API_KEY"
+skip_model_check = false
+admin_base_url = [
+    "http://0.0.0.0:8100/v1",
+]
+
+[model.client.headers]
+
+[model.client.headers_from_env]
+
+[model.client.extra_headers_from_state]
+X-Session-ID = "trajectory_id"
+
+[[train.source]]
+name = "jtc-tool-label-terminal-train"
+ratio = 1.0
+group_size = 16
+
+[train.source.env]
+id = ""
+max_concurrent_agents = 1
+
+[train.source.env.taskset]
+id = ""
+
+[train.source.env.taskset.task]
+judges = []
+
+[train.source.env.timeout]
+
+[train.source.env.retries]
+max_retries = 0
+include = []
+exclude = []
+
+[train.source.env.interception]
+type = "elastic"
+multiplex = 32
+
+[train.source.env.agent.runtime]
+type = "subprocess"
+
+[train.source.env.agent.timeout]
+
+[train.source.env.agent.retries]
+max_retries = 0
+include = []
+exclude = []
+
+[train.source.serve.pool]
+type = "elastic"
+multiplex = 128
+
+[train.source.legacy]
+id = "jtc_data_commons.harness.environments.jtc_tool_label_env"
+
+[train.source.legacy.args]
+dataset = "/weka/gfaria/prime_sft/data/rldata_datadev_ba8d071f1b4046ae_train.jsonl"
+split = "train"
+tools = [
+    "terminal",
+]
+terminal_server_url = "http://127.0.0.1:1212/terminal"
+browser_aware_terminal = true
+local_search_server_url = "http://127.0.0.1:1212/search"
+local_search_model_path = "localsearch:bc-v2-72k"
+timeout = 20
+max_retries = 3
+terminal_truncation = 2000
+max_tool_calls = 64
+max_turns = 65
+invalid_trace_penalty = -4.0
+tool_use_reward_coef = 0.0
+tool_stderr_penalty = 0.05
+standalone_command_repeat_penalty = 0.1
+standalone_command_repeat_free_count = 1
+standalone_command_repeat_commands = [
+    "cat",
+    "head",
+    "tail",
+]
+
+[train.source.legacy.extra_env_kwargs]
+max_seq_len = 32768
+
+[train.source.sampling]
+temperature = 1.0
+max_completion_tokens = 8192
+
+[train.source.sampling.extra_body]
+top_p = 0.97
+top_k = -1
+min_p = 0.0
+return_token_ids = true
+
+[train.source.sampling.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[train.source.algo]
+type = "grpo"
+
+[train.source.algo.sampling]
+source = "policy"
+
+[train.sampling]
+temperature = 1.0
+max_completion_tokens = 8192
+
+[train.sampling.extra_body]
+top_p = 0.97
+
+[train.sampling.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[tokenizer]
+name = "/weka/gfaria/prime_sft/outputs/quokka_sft_qwen35_9b_base_rltracer_16k_xmlv1_searchsourcecriteria_v3_32k_lr1e-5_200steps-retry1/weights/step_200"
+trust_remote_code = false
+
+[renderer]
+thinking_retention = "tool_cycle"
+name = "qwen3.5"
+enable_thinking = true
+add_vision_id = false
+image_cache_max = 256
+
+[optim]
+lr = 0.0001
+
+[eval]
+num_examples = -1
+group_size = 1
+interval = 25
+skip_first_step = false
+
+[[eval.source]]
+name = "jtc-tool-label-terminal-eval"
+ratio = 1.0
+num_examples = 64
+group_size = 4
+interval = 25
+
+[eval.source.env]
+id = ""
+max_concurrent_agents = 1
+
+[eval.source.env.taskset]
+id = ""
+
+[eval.source.env.taskset.task]
+judges = []
+
+[eval.source.env.timeout]
+
+[eval.source.env.retries]
+max_retries = 0
+include = []
+exclude = []
+
+[eval.source.env.interception]
+type = "elastic"
+multiplex = 32
+
+[eval.source.env.agent.runtime]
+type = "subprocess"
+
+[eval.source.env.agent.timeout]
+
+[eval.source.env.agent.retries]
+max_retries = 0
+include = []
+exclude = []
+
+[eval.source.serve.pool]
+type = "elastic"
+multiplex = 128
+
+[eval.source.legacy]
+id = "jtc_data_commons.harness.environments.jtc_tool_label_env"
+
+[eval.source.legacy.args]
+dataset = "/weka/gfaria/prime_sft/data/rldata_datadev_ba8d071f1b4046ae_validation.jsonl"
+split = "validation"
+tools = [
+    "terminal",
+]
+terminal_server_url = "http://127.0.0.1:1212/terminal"
+browser_aware_terminal = true
+local_search_server_url = "http://127.0.0.1:1212/search"
+local_search_model_path = "localsearch:bc-v2-72k"
+timeout = 20
+max_retries = 3
+terminal_truncation = 2000
+max_tool_calls = 64
+max_turns = 65
+invalid_trace_penalty = -4.0
+tool_use_reward_coef = 0.0
+tool_stderr_penalty = 0.05
+standalone_command_repeat_penalty = 0.1
+standalone_command_repeat_free_count = 1
+standalone_command_repeat_commands = [
+    "cat",
+    "head",
+    "tail",
+]
+
+[eval.source.legacy.extra_env_kwargs]
+
+[eval.source.sampling]
+temperature = 1.0
+top_p = "None"
+top_k = "None"
+min_p = "None"
+max_completion_tokens = 8192
+reasoning_effort = "None"
+
+[eval.source.sampling.extra_body]
+top_p = 0.97
+
+[eval.source.sampling.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[eval.sampling]
+temperature = 1.0
+max_completion_tokens = 8192
+
+[eval.sampling.extra_body]
+top_p = 0.97
+
+[eval.sampling.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[log]
+level = "info"
+vf_level = "info"
+json_logging = false
+log_data = false
+interval = 10.0
+
+[env_vars]
+
+[wandb]
+project = "rubric-rl"
+name = "quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400"
+tags = [
+    "quokka",
+    "jtc",
+    "datadev",
+    "rltracer",
+    "prime-rl",
+    "qwen3.5",
+    "9b",
+    "sft-step200",
+    "xml-v1",
+    "search-source-criteria",
+    "rlmix-ba8d071f1b4046ae",
+    "search-25pct",
+    "base-quokka-formula-75pct",
+    "per-source-pass-fail-balanced",
+    "minimal-sft-prompt-reuse",
+    "output-chars-power-1p5",
+    "mandatory-15k-chars",
+    "local-search-bc-v2-72k",
+    "browser-aware-terminal",
+    "saved-web-assets",
+    "no-oversampling",
+    "lr-4e-6",
+    "kl-tau-1e-3",
+    "betas-0.95-0.95",
+    "weight-decay-0",
+    "context-32k",
+    "max-tool-calls-64",
+    "400steps",
+]
+offline = false
+
+[wandb.log_extras]
+samples = true
+distributions = true
+interval = 10
+
+[ckpt]
+interval = 25
+resume_step = -1
+keep_last = 40
+skip_progress = false
+
+[weight_broadcast]
+host = "localhost"
+port = 29501
+timeout = 1200
+inference_world_size = 6
+type = "nccl"
+quantize_in_weight_transfer = false
+
+[rollout_transport]
+type = "zmq"
+host = "localhost"
+port = 5555
+hwm = 10

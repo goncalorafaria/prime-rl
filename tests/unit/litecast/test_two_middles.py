@@ -1,11 +1,13 @@
 """Real Redis discovery and HTTP transfers through two CPU middle nodes."""
 
 import asyncio
+import json
 import os
 import shutil
 import socket
 import subprocess
 import time
+from copy import copy
 from types import SimpleNamespace
 
 import numpy as np
@@ -17,7 +19,7 @@ from literegistry.registry import ServerRegistry
 from safetensors.numpy import save_file
 
 from prime_rl.litecast.distribution import Publisher, blocking, fetch_publication
-from prime_rl.litecast.protocol import peer_service
+from prime_rl.litecast.protocol import desired_key, peer_service
 
 
 def free_port():
@@ -27,7 +29,8 @@ def free_port():
 
 
 @pytest.mark.asyncio
-async def test_two_middles_registry_transfer_and_loss(tmp_path):
+async def test_two_middles_registry_transfer_and_loss(tmp_path, monkeypatch):
+    monkeypatch.setenv("LITECAST_RELAY_WAIT_SECONDS", "10")
     binary = os.getenv("LITECAST_TEST_REDIS_SERVER") or shutil.which("redis-server")
     if binary is None:
         pytest.skip("redis-server is required for the two-middle smoke")
@@ -89,6 +92,12 @@ async def test_two_middles_registry_transfer_and_loss(tmp_path):
         async with asyncio.timeout(20):
             while not all(version in middle.processed_versions for middle in middles):
                 await asyncio.sleep(0.05)
+        metrics = {}
+        early_fetch = asyncio.create_task(
+            fetch_publication(publication, registry, tmp_path / "client-first", "http", metrics=metrics)
+        )
+        await asyncio.sleep(0.1)
+        assert not early_fetch.done(), "download must give relays a head start"
         for middle in middles:
             registration = ServerRegistry(registry.store)
             registrations.append(registration)
@@ -110,12 +119,25 @@ async def test_two_middles_registry_transfer_and_loss(tmp_path):
         publisher = None
         records = (await registry.models(force=True))[service]
         assert len(records) == 2 and all(r["metadata"]["source_role"] == "middle" for r in records)
-        first = await fetch_publication(publication, registry, tmp_path / "client-first", "http")
+        first = await early_fetch
+        assert metrics["relay_wait_seconds"] > 0.1
+        assert metrics["source_group_size"] == 2
+        assert metrics["sources_used"] == 2
+        assert metrics["http_bytes"] == publication.size
+        assert metrics["http_failures"] == 0
+        assert metrics["publication_verify_seconds"] > 0
         publication.verify(first)
 
         # Stop the first middle and withdraw it; the surviving cache must suffice.
         await blocking(middles[0].shutdown)
         middles.pop(0)
+        # A stale registered source must fail over within the parallel transfer.
+        stale_metrics = {}
+        stale = await fetch_publication(publication, registry, tmp_path / "client-stale", "http", metrics=stale_metrics)
+        publication.verify(stale)
+        assert stale_metrics["http_failures"] > 0
+        assert stale_metrics["http_retries"] > 0
+        assert stale_metrics["sources_used"] == 1
         await registrations[0].deregister()
         registrations.pop(0)
         records = (await registry.models(force=True))[service]
@@ -148,7 +170,8 @@ async def test_two_middles_registry_transfer_and_loss(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_registry_middle_supervisors_publish_ready_sources(tmp_path):
+@pytest.mark.parametrize("multi_publisher", [False, True])
+async def test_registry_middle_supervisors_publish_ready_sources(tmp_path, multi_publisher):
     import sys
 
     config = SimpleNamespace(
@@ -167,8 +190,12 @@ async def test_registry_middle_supervisors_publish_ready_sources(tmp_path):
     publisher = Publisher(config, "fixture")
     processes = []
     logs = []
+    second_publisher = None
+    subscriptions = tmp_path / "publishers.json"
+    subscriptions.write_text(json.dumps([] if multi_publisher else [config.run_id]))
     try:
-        await publisher.start()
+        if not multi_publisher:
+            await publisher.start()
         for index in range(2):
             log = (tmp_path / f"middle-{index}.log").open("w")
             logs.append(log)
@@ -185,8 +212,7 @@ async def test_registry_middle_supervisors_publish_ready_sources(tmp_path):
                         "prime_rl.litecast.middle",
                         "--registry",
                         config.registry,
-                        "--run-id",
-                        config.run_id,
+                        *(["--publishers", str(subscriptions)] if multi_publisher else ["--run-id", config.run_id]),
                         "--advertise-host",
                         "127.0.0.1",
                         "--port",
@@ -198,6 +224,22 @@ async def test_registry_middle_supervisors_publish_ready_sources(tmp_path):
                     stderr=subprocess.STDOUT,
                 )
             )
+        if multi_publisher:
+            async def wait_logs(marker):
+                async with asyncio.timeout(120):
+                    while True:
+                        assert all(p.poll() is None for p in processes)
+                        if all(marker in (tmp_path / f"middle-{i}.log").read_text() for i in range(2)):
+                            return
+                        await asyncio.sleep(0.1)
+
+            # Both middle supervisors start empty, before either trainer exists.
+            await wait_logs("MIDDLE_SUPERVISOR_STARTED publishers=0")
+            staging = subscriptions.with_suffix(".tmp")
+            staging.write_text(json.dumps([config.run_id]))
+            staging.replace(subscriptions)
+            await wait_logs("MIDDLE_STATUS phase=waiting_for_publisher")
+            await publisher.start()
         (tmp_path / "adapter_config.json").write_text('{"peft_type":"LORA","r":8}')
         (tmp_path / "adapter_model.safetensors").write_bytes(b"supervised-adapter")
         publication = await publisher.publish(tmp_path, 1)
@@ -214,6 +256,77 @@ async def test_registry_middle_supervisors_publish_ready_sources(tmp_path):
             publication, publisher.registry, tmp_path / "download", "http", source_role="middle"
         )
         publication.verify(data)
+        if multi_publisher:
+            second_config = copy(config)
+            second_config.run_id = "second-publisher"
+            second_config.lease_seconds = 3
+            second_publisher = Publisher(second_config, "fixture")
+            await second_publisher.start()
+            # Same bytes and step still need independent publisher namespaces.
+            second_publication = await second_publisher.publish(tmp_path, 1)
+            second_service = peer_service(second_config.run_id, second_publication.digest)
+
+            def replace_subscriptions(content):
+                staging = subscriptions.with_suffix(".tmp")
+                staging.write_text(content)
+                staging.replace(subscriptions)
+
+            async def wait_sources(service_name, count):
+                async with asyncio.timeout(30):
+                    while True:
+                        assert all(p.poll() is None for p in processes)
+                        records = (await publisher.registry.models(force=True)).get(service_name, [])
+                        middles = [r for r in records if r["metadata"].get("source_role") == "middle"]
+                        if len(middles) == count:
+                            return middles
+                        await asyncio.sleep(0.1)
+
+            replace_subscriptions(json.dumps([config.run_id, second_config.run_id]))
+            second_records = await wait_sources(second_service, 2)
+            first_records = await wait_sources(service, 2)
+            assert {r["uri"] for r in first_records}.isdisjoint({r["uri"] for r in second_records})
+            payload = await fetch_publication(
+                second_publication, publisher.registry, tmp_path / "download-second", "http", source_role="middle"
+            )
+            second_publication.verify(payload)
+            assert payload == data
+
+            # A broken reload cannot withdraw an existing healthy subscription.
+            replace_subscriptions("{broken")
+            await asyncio.sleep(2)
+            assert len(await wait_sources(service, 2)) == 2
+            assert len(await wait_sources(second_service, 2)) == 2
+
+            # A new B owner resets only B's cache/version identities.
+            replace_subscriptions(json.dumps([config.run_id, second_config.run_id]))
+            await second_publisher.close()
+            async with asyncio.timeout(10):
+                while await publisher.store.get(desired_key(second_config.run_id)) is not None:
+                    await asyncio.sleep(0.1)
+            second_publisher = Publisher(second_config, "fixture")
+            await second_publisher.start()
+            (tmp_path / "adapter_model.safetensors").write_bytes(b"replacement-publisher-weights")
+            replacement = await second_publisher.publish(tmp_path, 1)
+            replacement_service = peer_service(second_config.run_id, replacement.digest)
+            await wait_sources(replacement_service, 2)
+            replacement.verify(
+                await fetch_publication(
+                    replacement, publisher.registry, tmp_path / "download-replacement", "http", source_role="middle"
+                )
+            )
+            surviving = await wait_sources(service, 2)
+            assert {r["uri"] for r in surviving} == {r["uri"] for r in first_records}
+
+            # Detach only B and confirm A still serves through the same middles.
+            replace_subscriptions(json.dumps([config.run_id]))
+            await wait_sources(replacement_service, 0)
+            surviving = await wait_sources(service, 2)
+            assert {r["uri"] for r in surviving} == {r["uri"] for r in first_records}
+            publication.verify(
+                await fetch_publication(
+                    publication, publisher.registry, tmp_path / "after-detach", "http", source_role="middle"
+                )
+            )
         for process in processes:
             process.terminate()
             await blocking(process.wait, 10)
@@ -234,4 +347,6 @@ async def test_registry_middle_supervisors_publish_ready_sources(tmp_path):
                 await blocking(process.wait, 10)
         for log in logs:
             log.close()
+        if second_publisher is not None:
+            await second_publisher.close()
         await publisher.close()

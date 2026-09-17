@@ -1,0 +1,10 @@
+max_inflight_per_replica = 64
+max_queued_requests = 256
+queue_timeout_seconds = 300
+request_timeout_seconds = 1200
+discovery_interval_seconds = 0.25
+
+prompt_affinity_replicas = 2
+
+# Allow at most two slots of imbalance at the 64-request replica limit.
+affinity_load_slack = 0.03125

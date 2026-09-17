@@ -1,0 +1,67 @@
+version: v2
+description: Four GPU TP4 inference trial attached to live rubric training through
+  LiteRegistry and LiteCast
+tasks:
+- name: inference
+  replicas: 1
+  image:
+    beaker: litecast-runtime
+  command:
+  - env
+  - BEAKER_REPLICA_RANK=1000
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - inference
+  resources:
+    gpuCount: 4
+    cpuCount: 32
+    memory: 192 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src:/gscratch/ark/graf/primebeaker/src:/gscratch/ark/graf/literegistry-core/literegistry_tool_client/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: OMP_NUM_THREADS
+    value: '8'
+  - name: MAX_JOBS
+    value: '8'
+  - name: LITECAST_REQUIRE_MIDDLE
+    value: '0'
+  - name: LITECAST_CAPACITY_ENABLED
+    value: '1'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/train.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/inference-tp4.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/capacity-aggressive.toml
+  - name: LITECAST_MODEL_SOURCE
+    value: /gscratch/ark/graf/data/batchrubrics/models/sloth2b-sft-step400
+  - name: LITECAST_DATASET_SOURCE
+    value: /gscratch/ark/graf/data/batchrubrics/rl_datadev_7ef8249d31225b43/active-rl
+  - name: LITECAST_MIN_MIDDLES
+    value: '1'
+  - name: LITECAST_PARENT_EXPERIMENT_ID
+    value: ccb032b1d77346608ed3109138ab96a8
+  result:
+    path: /tmp/litecast-result
+rexs:
+  allocations:
+  - name: inference
+    tasks:
+    - inference
+    profile: profile-klone-inference-tp4.yaml
+  completion_task: inference
+  failure_policies:
+    inference:
+      action: fail_experiment

@@ -1,0 +1,191 @@
+max_steps = 400
+output_dir = "outputs/litecast-rubrics"
+
+[wandb]
+project = "rubric-rl"
+name = "sloth2b-sft400-litecast-lora"
+tags = [
+    "litecast",
+    "p2p",
+    "lora",
+    "sloth2b",
+    "rubrics",
+]
+entity = "graf"
+
+[deployment]
+type = "single_node"
+num_train_gpus = 1
+num_infer_gpus = 0
+
+[model]
+name = "/tmp/litecast-rubrics/models/sloth2b-sft-step400"
+
+[trainer]
+enable_token_export = false
+
+[trainer.model]
+compile = "None"
+fsdp_cpu_offload = false
+optim_cpu_offload = false
+ac_offloading = "None"
+seq_len = 262144
+attn = "flash_attention_2"
+impl = "auto"
+cp = 1
+
+[trainer.model.ac]
+mode = "full"
+freq = 1
+
+[trainer.model.lora]
+rank = 32
+alpha = 64
+dropout = 0.0
+target_modules = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+]
+
+[trainer.loss]
+type = "default"
+aggregation = "group_token_mean"
+kl_tau = 0.001
+
+[trainer.optim]
+type = "adamw"
+lr = 2e-06
+max_norm = 1.0
+weight_decay = 0.0
+eps = 1e-10
+betas1 = 0.95
+betas2 = 0.95
+
+[orchestrator]
+batch_size = 128
+group_size = 8
+seq_len = 65536
+max_off_policy_steps = 4
+oversampling_factor = 4.0
+max_inflight_episodes = 512
+collect_inference_metrics = false
+eval_max_inflight_episodes = 128
+
+[orchestrator.model.lora]
+name = "search-2b"
+rank = 32
+alpha = 64
+
+[orchestrator.model.client]
+base_url = [
+    "http://registry-host:1212/v1",
+]
+
+[orchestrator.model.client.litecast]
+registry = "redis://registry-host:6379/0"
+run_id = "litecast-toy"
+origin_host = "trainer-host"
+origin_port = 8201
+min_replicas = 1
+retain_versions = 6
+transport = "http"
+
+[orchestrator.train.sampling]
+max_completion_tokens = 32768
+temperature = 1.0
+top_p = 0.97
+
+[orchestrator.train.sampling.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[[orchestrator.train.source]]
+name = "jtc-tool-label-terminal-train"
+
+[orchestrator.train.source.legacy]
+id = "primebeaker.environments.articulated_harness_env"
+
+[orchestrator.train.source.legacy.args]
+dataset = "/tmp/litecast-rubrics/data/active-rl"
+split = "train"
+tools = [
+    "terminal",
+    "submit",
+]
+terminal_server_url = "http://TERMINAL_SERVICE_REQUIRED/terminal"
+timeout = 20
+max_retries = 3
+terminal_truncation = 2000
+max_tool_calls = 128
+max_turns = 129
+invalid_trace_penalty = -4.0
+rubric_completion_reward_coef = 1.0
+missing_rubric_penalty_coef = 1.0
+tool_stderr_penalty = 0.1
+unknown_tool_penalty = 0.1
+standalone_command_repeat_penalty = 0.05
+standalone_command_repeat_free_count = 1
+
+[orchestrator.renderer]
+name = "qwen3.5"
+enable_thinking = true
+thinking_retention = "tool_cycle"
+
+[orchestrator.eval]
+interval = 25
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 32768
+temperature = 1.0
+
+[orchestrator.eval.sampling.extra_body]
+top_p = 0.97
+
+[orchestrator.eval.sampling.extra_body.chat_template_kwargs]
+enable_thinking = true
+
+[[orchestrator.eval.source]]
+name = "jtc-tool-label-terminal-eval"
+num_examples = 256
+group_size = 1
+
+[orchestrator.eval.source.legacy]
+id = "primebeaker.environments.articulated_harness_env"
+
+[orchestrator.eval.source.legacy.args]
+dataset = "/tmp/litecast-rubrics/data/active-rl"
+split = "validation"
+tools = [
+    "terminal",
+    "submit",
+]
+terminal_server_url = "http://TERMINAL_SERVICE_REQUIRED/terminal"
+timeout = 20
+max_retries = 3
+terminal_truncation = 2000
+max_tool_calls = 128
+max_turns = 129
+invalid_trace_penalty = -4.0
+rubric_completion_reward_coef = 1.0
+missing_rubric_penalty_coef = 1.0
+tool_stderr_penalty = 0.1
+unknown_tool_penalty = 0.1
+standalone_command_repeat_penalty = 0.05
+standalone_command_repeat_free_count = 1
+
+[weight_broadcast]
+type = "filesystem"
+
+[ckpt]
+interval = 50
+keep_last = 1
+
+[log]
+level = "info"
+
+[rollout_transport]
+type = "filesystem"

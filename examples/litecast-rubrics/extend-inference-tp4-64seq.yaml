@@ -1,0 +1,7 @@
+resources:
+  gpuCount: 4
+  cpuCount: 32
+  memory: 192 GiB
+envVars:
+- name: LITECAST_INFERENCE_CONFIG
+  value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/inference-tp4-64seq.toml

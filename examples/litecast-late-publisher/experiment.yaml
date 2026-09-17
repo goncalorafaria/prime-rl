@@ -1,0 +1,68 @@
+version: v2
+description: Two A40 replicas with a second LoRA publisher joining live through LiteRegistry
+tasks:
+- name: benchmark
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - check
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-late-publisher/run.py
+  resources:
+    gpuCount: 0
+    cpuCount: 8
+    memory: 32 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src
+  - name: OMP_NUM_THREADS
+    value: '4'
+  result:
+    path: /tmp/litecast-result
+- name: inference
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - check
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-late-publisher/run.py
+  - worker
+  resources:
+    gpuCount: 1
+    cpuCount: 8
+    memory: 64 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src
+  - name: OMP_NUM_THREADS
+    value: '4'
+  result:
+    path: /tmp/litecast-result
+  replicas: 2
+rexs:
+  allocations:
+  - name: benchmark
+    tasks:
+    - benchmark
+    profile: ../litecast-affinity-bench/profile-head.yaml
+  - name: inference
+    tasks:
+    - inference
+    profile: ../litecast-affinity-bench/profile-a40.yaml
+    independent_replicas: true
+  completion_task: benchmark
+  failure_policies:
+    benchmark:
+      action: fail_experiment
+    inference:
+      action: fail_experiment

@@ -1,5 +1,5 @@
 version: v2
-description: 50-step Qwen3.5-2B LoRA run with four A40 inference replicas and 256
+description: 50-step Qwen3.5-2B LoRA run with four A40 inference replicas and 128
   inflight rollouts
 tasks:
 - name: head

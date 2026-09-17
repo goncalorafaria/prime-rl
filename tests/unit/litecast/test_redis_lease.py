@@ -12,7 +12,8 @@ from prime_rl.litecast.distribution import Publisher
 
 
 @pytest.mark.asyncio
-async def test_redis_fences_a_replaced_publisher(tmp_path):
+@pytest.mark.parametrize("discovery", ["direct", "sqlite"])
+async def test_redis_fences_a_replaced_publisher(tmp_path, discovery):
     binary = os.getenv("LITECAST_TEST_REDIS_SERVER") or shutil.which("redis-server")
     if binary is None:
         pytest.skip("redis-server is required for the real Redis lease test")
@@ -35,8 +36,14 @@ async def test_redis_fences_a_replaced_publisher(tmp_path):
                     break
                 except redis.ConnectionError:
                     await asyncio.sleep(0.02)
+        registry = url
+        if discovery == "sqlite":
+            from literegistry.coop.endpoints import publish
+            head = "sqlite://" + str(tmp_path / "head.sqlite3")
+            await asyncio.to_thread(publish, head, "redis", url, publisher_id="head", ttl_seconds=30)
+            registry = "head+" + head
         config = SimpleNamespace(
-            registry=url,
+            registry=registry,
             run_id="fenced",
             origin_host="127.0.0.1",
             origin_port=0,

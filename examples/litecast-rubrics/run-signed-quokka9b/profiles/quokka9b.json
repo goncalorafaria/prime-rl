@@ -1,0 +1,18 @@
+{
+  "model": "s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400",
+  "rubric_mode": "per_rubric",
+  "prompt_template_path": "/gscratch/ark/graf/primebeaker/src/primebeaker/resources/judge_templates/jtc-io-terminal-release-browse-xml-v1.json",
+  "max_turns": 65,
+  "max_tool_calls": 64,
+  "max_tokens": 8192,
+  "timeout": 300,
+  "max_retries": 3,
+  "rubric_max_retries": 1,
+  "rollout_timeout": 1000,
+  "evaluation_timeout": 1200,
+  "tools": [
+    "webterminal"
+  ],
+  "local_search_model_path": null,
+  "temperature": 0.0
+}

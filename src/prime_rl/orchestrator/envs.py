@@ -223,6 +223,10 @@ class Env:
         rollouts = [ROLLOUT_TYPE.model_construct(**dict(wire)) for wire in episode.traces]
         for rollout in rollouts:
             rollout.episode_id = episode.id
+            if model_name.endswith("-live"):
+                from prime_rl.litecast.lineage import annotate_trace
+
+                annotate_trace(rollout)
             if not episode.ok and rollout.ok:
                 error = episode.error or vf.Error(
                     type="EpisodeFailed", message="A sibling trace in this episode failed"

@@ -1,0 +1,482 @@
+version: v2
+description: Qwen3.5-4B signed-rubric LoRA training with LiteCast and separate Quokka9B
+  judge server; setup only
+tasks:
+- name: head
+  replicas: 1
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - head
+  resources:
+    gpuCount: 0
+    cpuCount: 4
+    memory: 16 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src:/gscratch/ark/graf/primebeaker/src:/gscratch/ark/graf/literegistry-core/literegistry_tool_client/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: LITECAST_REQUIRE_MIDDLE
+    value: '0'
+  - name: LITECAST_CAPACITY_ENABLED
+    value: '1'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/train-group8.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/inference-tp1.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/capacity.toml
+  - name: LITECAST_MODEL_SOURCE
+    value: hf://Qwen/Qwen3.5-4B
+  - name: LITECAST_DATASET_SOURCE
+    value: /gscratch/ark/graf/data/rubrichub-signed-penalties-20260917/hf
+  - name: LITECAST_MIN_MIDDLES
+    value: '1'
+  - name: LITECAST_STAGE_NAMESPACE
+    value: signed-quokka9b-20260917
+  - name: LITECAST_JUDGE_MODEL
+    value: s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400
+  - name: LITECAST_JUDGE_SERVICE
+    value: signed-quokka9b-judge
+  - name: TIMEOUT
+    value: '600'
+  - name: MAX_RETRIES
+    value: '5'
+  result:
+    path: /tmp/litecast-result
+- name: middle
+  replicas: 8
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - middle
+  resources:
+    gpuCount: 0
+    cpuCount: 16
+    memory: 64 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src:/gscratch/ark/graf/primebeaker/src:/gscratch/ark/graf/literegistry-core/literegistry_tool_client/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/train-group8.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/inference-tp1.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/capacity.toml
+  - name: LITECAST_MODEL_SOURCE
+    value: hf://Qwen/Qwen3.5-4B
+  - name: LITECAST_DATASET_SOURCE
+    value: /gscratch/ark/graf/data/rubrichub-signed-penalties-20260917/hf
+  - name: LITECAST_MIN_MIDDLES
+    value: '1'
+  - name: LITECAST_STAGE_NAMESPACE
+    value: signed-quokka9b-20260917
+  - name: LITECAST_JUDGE_MODEL
+    value: s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400
+  - name: LITECAST_JUDGE_SERVICE
+    value: signed-quokka9b-judge
+  result:
+    path: /tmp/litecast-result
+- name: trainer
+  replicas: 1
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - trainer
+  resources:
+    gpuCount: 1
+    cpuCount: 16
+    memory: 256 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: NETRC
+    value: /gscratch/ark/graf/.netrc
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src:/gscratch/ark/graf/primebeaker/src:/gscratch/ark/graf/literegistry-core/literegistry_tool_client/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: OMP_NUM_THREADS
+    value: '8'
+  - name: MAX_JOBS
+    value: '8'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/train-group8.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/inference-tp1.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/capacity.toml
+  - name: LITECAST_MODEL_SOURCE
+    value: hf://Qwen/Qwen3.5-4B
+  - name: LITECAST_DATASET_SOURCE
+    value: /gscratch/ark/graf/data/rubrichub-signed-penalties-20260917/hf
+  - name: LITECAST_MIN_MIDDLES
+    value: '1'
+  - name: LITECAST_PROMPT_AFFINITY
+    value: '1'
+  - name: LITECAST_INFLIGHT_UPDATES
+    value: '1'
+  - name: LITECAST_WAIT_FIRST_REPLICA
+    value: '1'
+  - name: LITECAST_STAGE_NAMESPACE
+    value: signed-quokka9b-20260917
+  - name: LITECAST_JUDGE_MODEL
+    value: s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400
+  - name: LITECAST_JUDGE_SERVICE
+    value: signed-quokka9b-judge
+  - name: TIMEOUT
+    value: '600'
+  - name: MAX_RETRIES
+    value: '5'
+  result:
+    path: /tmp/litecast-result
+- name: inference
+  replicas: 8
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - inference
+  resources:
+    gpuCount: 1
+    cpuCount: 16
+    memory: 128 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src:/gscratch/ark/graf/primebeaker/src:/gscratch/ark/graf/literegistry-core/literegistry_tool_client/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: OMP_NUM_THREADS
+    value: '8'
+  - name: MAX_JOBS
+    value: '8'
+  - name: LITECAST_REQUIRE_MIDDLE
+    value: '0'
+  - name: LITECAST_CAPACITY_ENABLED
+    value: '1'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/train-group8.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/inference-tp1.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/capacity.toml
+  - name: LITECAST_MODEL_SOURCE
+    value: hf://Qwen/Qwen3.5-4B
+  - name: LITECAST_DATASET_SOURCE
+    value: /gscratch/ark/graf/data/rubrichub-signed-penalties-20260917/hf
+  - name: LITECAST_MIN_MIDDLES
+    value: '1'
+  - name: LITECAST_INFLIGHT_UPDATES
+    value: '1'
+  - name: LITECAST_REPLICA_OFFSET
+    value: '0'
+  - name: LITECAST_RELAY_WAIT_SECONDS
+    value: '10'
+  - name: LITECAST_STAGE_NAMESPACE
+    value: signed-quokka9b-20260917
+  - name: LITECAST_JUDGE_MODEL
+    value: s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400
+  - name: LITECAST_JUDGE_SERVICE
+    value: signed-quokka9b-judge
+  result:
+    path: /tmp/litecast-result
+- name: judge
+  replicas: 8
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - check
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/judge-role.py
+  resources:
+    gpuCount: 1
+    cpuCount: 8
+    memory: 64 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  - mountPath: /s3cfg
+    source:
+      hostPath: /gscratch/ark/graf/.s3cfg
+    readOnly: true
+  - mountPath: /s5cmd
+    source:
+      hostPath: /usr/local/bin/s5cmd
+    readOnly: true
+  - mountPath: /literegistry-source
+    source:
+      hostPath: /gscratch/ark/graf/literegistry-core
+    readOnly: true
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src:/gscratch/ark/graf/primebeaker/src:/gscratch/ark/graf/literegistry-core/literegistry_tool_client/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: OMP_NUM_THREADS
+    value: '8'
+  - name: MAX_JOBS
+    value: '8'
+  - name: LITECAST_REQUIRE_MIDDLE
+    value: '0'
+  - name: LITECAST_CAPACITY_ENABLED
+    value: '1'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/train-group8.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/inference-h200-tp2.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/capacity.toml
+  - name: LITECAST_MODEL_SOURCE
+    value: hf://Qwen/Qwen3.5-4B
+  - name: LITECAST_DATASET_SOURCE
+    value: /gscratch/ark/graf/data/rubrichub-signed-penalties-20260917/hf
+  - name: LITECAST_MIN_MIDDLES
+    value: '1'
+  - name: LITECAST_INFLIGHT_UPDATES
+    value: '1'
+  - name: LITECAST_REPLICA_OFFSET
+    value: '1000'
+  - name: LITECAST_RELAY_WAIT_SECONDS
+    value: '10'
+  - name: LITECAST_STAGE_NAMESPACE
+    value: signed-quokka9b-20260917
+  - name: LITECAST_JUDGE_MODEL
+    value: s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400
+  - name: LITECAST_JUDGE_SERVICE
+    value: signed-quokka9b-judge
+  - name: TIMEOUT
+    value: '600'
+  - name: MAX_RETRIES
+    value: '5'
+  result:
+    path: /tmp/litecast-result
+- name: judge-api
+  replicas: 1
+  image:
+    beaker: judge-runtime
+  command:
+  - /opt/literegistry/bin/uv
+  - run
+  - --no-project
+  - --python
+  - /opt/literegistry/bin/python
+  - python
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/judge-api.py
+  resources:
+    gpuCount: 0
+    cpuCount: 4
+    memory: 16 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/jtc-runtime:/gscratch/ark/graf/prime-rl-shardcast/src:/gscratch/ark/graf/primebeaker/src:/gscratch/ark/graf/literegistry-core/literegistry_tool_client/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: OMP_NUM_THREADS
+    value: '8'
+  - name: MAX_JOBS
+    value: '8'
+  - name: LITECAST_REQUIRE_MIDDLE
+    value: '0'
+  - name: LITECAST_CAPACITY_ENABLED
+    value: '1'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/train-group8.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/inference-h200-tp2.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/capacity.toml
+  - name: LITECAST_MODEL_SOURCE
+    value: hf://Qwen/Qwen3.5-4B
+  - name: LITECAST_DATASET_SOURCE
+    value: /gscratch/ark/graf/data/rubrichub-signed-penalties-20260917/hf
+  - name: LITECAST_MIN_MIDDLES
+    value: '1'
+  - name: LITECAST_INFLIGHT_UPDATES
+    value: '1'
+  - name: LITECAST_REPLICA_OFFSET
+    value: '1000'
+  - name: LITECAST_RELAY_WAIT_SECONDS
+    value: '10'
+  - name: LITECAST_STAGE_NAMESPACE
+    value: signed-quokka9b-20260917
+  - name: LITECAST_JUDGE_MODEL
+    value: s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400
+  - name: LITECAST_JUDGE_SERVICE
+    value: signed-quokka9b-judge
+  - name: TIMEOUT
+    value: '600'
+  - name: MAX_RETRIES
+    value: '5'
+  - name: CHAT_AFFINITY_LOAD_SLACK
+    value: '2'
+  result:
+    path: /tmp/litecast-result
+- name: terminal
+  replicas: 16
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - terminal
+  resources:
+    gpuCount: 0
+    cpuCount: 8
+    memory: 32 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src:/gscratch/ark/graf/primebeaker/src:/gscratch/ark/graf/literegistry-core/literegistry_tool_client/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/train-group8.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/inference-tp1.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-rubrics/run-signed-quokka9b/capacity.toml
+  - name: LITECAST_MODEL_SOURCE
+    value: hf://Qwen/Qwen3.5-4B
+  - name: LITECAST_DATASET_SOURCE
+    value: /gscratch/ark/graf/data/rubrichub-signed-penalties-20260917/hf
+  - name: LITECAST_MIN_MIDDLES
+    value: '1'
+  - name: LITECAST_STAGE_NAMESPACE
+    value: signed-quokka9b-20260917
+  - name: LITECAST_JUDGE_MODEL
+    value: s3://gfaria-ai2-transfer/prime_sft/outputs/quokka-sft-qwen35-9b-rltracer-xmlv1-search25-baseformula-ba8d07-step400/weights/step_400
+  - name: LITECAST_JUDGE_SERVICE
+    value: signed-quokka9b-judge
+  result:
+    path: /tmp/litecast-result
+rexs:
+  allocations:
+  - name: head
+    tasks:
+    - head
+    profile: profile-klone-head.yaml
+  - name: middle
+    tasks:
+    - middle
+    profile: profile-klone-middle.yaml
+    independent_replicas: true
+  - name: trainer
+    tasks:
+    - trainer
+    profile: profile-klone-h200-owned.yaml
+  - name: judge
+    tasks:
+    - judge
+    profile: profile-klone-judge.yaml
+    independent_replicas: true
+  - name: inference
+    tasks:
+    - inference
+    profile: profile-klone-inference-tp1.yaml
+    independent_replicas: true
+  - name: judge-api
+    tasks:
+    - judge-api
+    profile: profile-klone-judge-api.yaml
+  - name: terminal
+    tasks:
+    - terminal
+    profile: profile-klone-terminal.yaml
+    independent_replicas: true
+  completion_task: trainer
+  failure_policies:
+    trainer:
+      action: fail_experiment
+    head:
+      action: restart
+      max_restarts: null
+    middle:
+      action: restart
+      max_restarts: null
+    inference:
+      action: restart
+      max_restarts: null
+    judge:
+      action: restart
+      max_restarts: null
+    terminal:
+      action: restart
+      max_restarts: null
+    judge-api:
+      action: restart
+      max_restarts: null

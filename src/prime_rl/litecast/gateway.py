@@ -1,6 +1,7 @@
 """Capacity-aware routing installed through LiteRegistry's gateway extension API."""
 
 import asyncio
+import hashlib
 import os
 import random
 import time
@@ -34,9 +35,16 @@ class CapacityConfig:
     request_timeout_seconds: float = 300
     discovery_interval_seconds: float = 0.25
 
+    prompt_affinity_replicas: int = 2
+    affinity_load_slack: float = 0.125
+
     def __post_init__(self):
         if min(self.__dict__.values()) <= 0:
             raise ValueError("capacity limits and timeouts must be positive")
+        if self.affinity_load_slack > 1:
+            raise ValueError("affinity_load_slack must be at most 1")
+        if type(self.prompt_affinity_replicas) is not int:
+            raise ValueError("prompt_affinity_replicas must be an integer")
 
     @classmethod
     def load(cls, path=None):
@@ -59,6 +67,8 @@ class CapacityRouting:
         self.queue_full = 0
         self.queue_timeouts = 0
         self.worker_rejections = 0
+        self.affinity_preferred = 0
+        self.affinity_overflow = 0
 
     async def discover(self):
         async with self.discovery_lock:
@@ -67,7 +77,7 @@ class CapacityRouting:
                 self.refreshed = time.monotonic()
         return self.records
 
-    async def acquire(self, model: str, deadline: float):
+    async def acquire(self, model: str, deadline: float, affinity_id: str | None = None, preferred_replica: str | None = None):
         ticket = object()
         if len(self.pending) >= self.config.max_queued_requests:
             self.queue_full += 1
@@ -79,12 +89,14 @@ class CapacityRouting:
                     records = (await self.discover()).get(model, [])
                     first = next(t for t, name in self.pending.items() if name == model)
                     candidates = []
+                    identities = set()
                     for record in records:
                         metadata = record.get("metadata", {})
                         identity = metadata.get("replica_id")
                         capacity = metadata.get("max_inflight_requests", 0)
                         if not identity or type(capacity) is not int or capacity <= 0:
                             continue
+                        identities.add(identity)
                         capacity = min(capacity, self.config.max_inflight_per_replica)
                         active = self.active.get(identity, 0)
                         if active < capacity and self.cooldown.get(identity, 0) <= time.monotonic():
@@ -92,8 +104,34 @@ class CapacityRouting:
                     # No await between the capacity check and reservation: all
                     # policy names share one atomic counter per replica process.
                     if first is ticket and candidates:
-                        random.shuffle(candidates)
-                        _, identity, uri = min(candidates, key=lambda item: item[0])
+                        if preferred_replica:
+                            lowest_load = min(c[0] for c in candidates)
+                            preferred = [c for c in candidates if c[1] == preferred_replica
+                                         and c[0] <= lowest_load + self.config.affinity_load_slack]
+                            if preferred:
+                                candidates = preferred
+                                self.affinity_preferred += 1
+                            else:
+                                self.affinity_overflow += 1
+                            random.shuffle(candidates)
+                            _, identity, uri = min(candidates, key=lambda item: item[0])
+                        elif affinity_id:
+                            ranked = sorted(
+                                identities,
+                                key=lambda identity: hashlib.sha256(f"{affinity_id}:{identity}".encode()).digest(),
+                                reverse=True,
+                            )
+                            preference = {identity: rank for rank, identity in enumerate(ranked)}
+                            preferred = [c for c in candidates if preference[c[1]] < self.config.prompt_affinity_replicas]
+                            if preferred:
+                                candidates = preferred
+                                self.affinity_preferred += 1
+                            else:
+                                self.affinity_overflow += 1
+                            _, identity, uri = min(candidates, key=lambda item: (item[0], preference[item[1]]))
+                        else:
+                            random.shuffle(candidates)
+                            _, identity, uri = min(candidates, key=lambda item: item[0])
                         self.active[identity] = self.active.get(identity, 0) + 1
                         return identity, uri
                     self.changed.clear()
@@ -119,9 +157,21 @@ class CapacityRouting:
     async def forward(self, request):
         if "/" + request.endpoint.strip("/") not in GENERATION_PATHS:
             return await self.fallback.forward(request)
+        affinity_id = next((v for k, v in request.headers.items() if k.lower() == "x-session-id"), None)
+        preferred_replica = None
+        if affinity_id and affinity_id.startswith("replica:"):
+            preferred_replica = affinity_id.removeprefix("replica:")
+            if not preferred_replica or len(preferred_replica) > 128:
+                preferred_replica = None
+            affinity_id = None
+        if affinity_id is not None and (
+            not affinity_id.startswith("prompt-sha256:") or len(affinity_id) != len("prompt-sha256:") + 64
+            or any(char not in "0123456789abcdef" for char in affinity_id.removeprefix("prompt-sha256:"))
+        ):
+            affinity_id = None
         deadline = time.monotonic() + self.config.queue_timeout_seconds
         while True:
-            identity, uri = await self.acquire(request.service, deadline)
+            identity, uri = await self.acquire(request.service, deadline, affinity_id, preferred_replica)
             client = httpx.AsyncClient(timeout=self.config.request_timeout_seconds)
             response = None
 
@@ -155,6 +205,17 @@ class CapacityRouting:
                 await asyncio.shield(cleanup())
                 continue
 
+            if (request.endpoint.strip("/") == "inference/v1/generate"
+                    and not request.payload.get("stream", False) and response.is_success):
+                try:
+                    await response.aread()
+                    payload = response.json()
+                    payload["litecast_replica_id"] = identity
+                    self.completed += 1
+                    return RoutingResponse(body=JSONResponse(payload, status_code=response.status_code))
+                finally:
+                    await asyncio.shield(cleanup())
+
             async def body():
                 async for chunk in response.aiter_raw():
                     yield chunk
@@ -182,6 +243,8 @@ class CapacityRouting:
             "queue_full": self.queue_full,
             "queue_timeouts": self.queue_timeouts,
             "worker_rejections": self.worker_rejections,
+            "affinity_preferred": self.affinity_preferred,
+            "affinity_overflow": self.affinity_overflow,
         }
 
 
@@ -189,6 +252,9 @@ def create_app(registry=None, config=None):
     registry = registry or RegistryClient(get_kvstore(os.environ["REGISTRY_PATH"], raise_on_error=True), cache_ttl=0)
     routing = CapacityRouting(registry, config or CapacityConfig.load(os.getenv("LITECAST_CAPACITY_CONFIG")))
     proxy_routes = default_proxy_routes() + [
+        ProxyRoute(
+            "/judge", "judge", service_from_field("model_path", "input", "output", "rubrics", "model"), name="judge"
+        ),
         ProxyRoute(
             "/inference/v1/generate", "inference/v1/generate", service_from_field("model"), name="token_generate"
         )

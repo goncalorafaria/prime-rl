@@ -1,0 +1,195 @@
+version: v2
+description: 50-step Qwen3.5-2B LoRA P2P run with four A40 inference replicas and 128
+  inflight rollouts
+tasks:
+- name: head
+  replicas: 1
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - head
+  resources:
+    gpuCount: 0
+    cpuCount: 4
+    memory: 16 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: LITECAST_REQUIRE_MIDDLE
+    value: '0'
+  - name: LITECAST_CAPACITY_ENABLED
+    value: '1'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/train-50-aggressive.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/inference-aggressive.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/capacity-aggressive.toml
+  result:
+    path: /tmp/litecast-result
+- name: middle
+  replicas: 2
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - middle
+  resources:
+    gpuCount: 0
+    cpuCount: 16
+    memory: 64 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/train-50-aggressive.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/inference-aggressive.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/capacity-aggressive.toml
+  result:
+    path: /tmp/litecast-result
+- name: trainer
+  replicas: 1
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - trainer
+  resources:
+    gpuCount: 1
+    cpuCount: 8
+    memory: 96 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: NETRC
+    value: /gscratch/ark/graf/.netrc
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: OMP_NUM_THREADS
+    value: '8'
+  - name: MAX_JOBS
+    value: '8'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/train-50-aggressive.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/inference-aggressive.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/capacity-aggressive.toml
+  result:
+    path: /tmp/litecast-result
+- name: inference
+  replicas: 4
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - inference
+  resources:
+    gpuCount: 1
+    cpuCount: 8
+    memory: 96 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars:
+  - name: UV_PROJECT_ENVIRONMENT
+    value: /gscratch/ark/graf/prime-rl-shardcast/outputs/toy-runtime-host
+  - name: PYTHONPATH
+    value: /gscratch/ark/graf/prime-rl-shardcast/src
+  - name: LITECAST_MODEL_CACHE
+    value: /tmp/litecast-hf
+  - name: GATEWAY_REGISTRATION_ENABLED
+    value: 'false'
+  - name: REGISTRY_CACHE_TTL_SECONDS
+    value: '0'
+  - name: OMP_NUM_THREADS
+    value: '8'
+  - name: MAX_JOBS
+    value: '8'
+  - name: LITECAST_REQUIRE_MIDDLE
+    value: '0'
+  - name: LITECAST_CAPACITY_ENABLED
+    value: '1'
+  - name: LITECAST_TRAIN_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/train-50-aggressive.toml
+  - name: LITECAST_INFERENCE_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/inference-aggressive.toml
+  - name: LITECAST_CAPACITY_CONFIG
+    value: /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/capacity-aggressive.toml
+  result:
+    path: /tmp/litecast-result
+rexs:
+  allocations:
+  - name: head
+    tasks:
+    - head
+    profile: profile-cpu-50.yaml
+  - name: middle
+    tasks:
+    - middle
+    profile: profile-middle-50.yaml
+    independent_replicas: true
+  - name: trainer
+    tasks:
+    - trainer
+    profile: profile-a40-50.yaml
+  - name: inference
+    tasks:
+    - inference
+    profile: profile-a40-50.yaml
+    independent_replicas: true
+  completion_task: trainer
+  failure_policies:
+    trainer:
+      action: fail_experiment
+    head:
+      action: restart
+      max_restarts: 10
+    middle:
+      action: restart
+      max_restarts: 10
+    inference:
+      action: restart
+      max_restarts: 10

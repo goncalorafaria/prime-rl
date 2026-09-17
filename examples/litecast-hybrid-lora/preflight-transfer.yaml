@@ -1,0 +1,33 @@
+version: v2
+description: Parallel middle-source transfer and stale-source failover validation
+tasks:
+- name: preflight
+  replicas: 1
+  image:
+    beaker: litecast-runtime
+  command:
+  - bash
+  - /gscratch/ark/graf/prime-rl-shardcast/examples/litecast-toy/runtime-cache.sh
+  - check
+  - /mmfs1/gscratch/ark/graf/prime-rl-shardcast/examples/litecast-hybrid-lora/check_transfer.py
+  resources:
+    gpuCount: 0
+    cpuCount: 4
+    memory: 16 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  envVars: []
+  result:
+    path: /tmp/litecast-result
+rexs:
+  allocations:
+  - name: preflight
+    tasks:
+    - preflight
+    profile: ../litecast-rubrics/profile-klone-head.yaml
+  completion_task: preflight
+  failure_policies:
+    preflight:
+      action: fail_experiment

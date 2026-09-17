@@ -5,6 +5,7 @@ from pathlib import Path
 
 from prime_rl.litecast.distribution import Publisher
 from prime_rl.litecast.protocol import base_alias
+from prime_rl.litecast.inflight import enabled, live_alias
 from prime_rl.utils.client import StaticInferencePool
 
 
@@ -63,7 +64,7 @@ class LitecastInferencePool(StaticInferencePool):
             "litecast/update_seconds": ready - started,
             **await self.publisher.transfer_metrics(publication),
         }
-        self.model_name = publication.model_name
+        self.model_name = live_alias(publication) if enabled() else publication.model_name
 
     async def stop(self):
         await self.publisher.close()

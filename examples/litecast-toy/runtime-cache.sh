@@ -78,6 +78,7 @@ else
 fi
 flock -u 9
 exec 9>&-
+export PYTHONPATH=/gscratch/ark/graf/litecast:/gscratch/ark/graf/literegistry-core:${PYTHONPATH:-}
 export UV_PROJECT_ENVIRONMENT=$local_root/runtime
 export PATH=$local_root/runtime/bin:$PATH
 source "$here/model-cache.sh"
@@ -97,6 +98,12 @@ if [[ $removed_fakeroot == true ]]; then
     unset FAKEROOTKEY
     echo "RUNTIME_FAKEROOT_PRELOAD_REMOVED"
 fi
+# Keep compiler caches within this user's runtime instead of /tmp/*_root.
+export TORCHINDUCTOR_CACHE_DIR=$local_root/compiler-cache/torchinductor
+export TRITON_CACHE_DIR=$local_root/compiler-cache/triton
+export TILELANG_CACHE_DIR=$local_root/compiler-cache/tilelang
+mkdir -p -m 700 "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR" "$TILELANG_CACHE_DIR"
+echo "COMPILER_CACHE path=$local_root/compiler-cache"
 if [[ ${1:-} == check ]]; then
     shift
     exec uv run --no-project --python "$local_root/runtime/bin/python" python "$@"
