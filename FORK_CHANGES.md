@@ -1,7 +1,8 @@
 # Grouped-rubric integration
 
 Based on upstream PrimeIntellect-ai/prime-rl `f984dee55` (0.9.0), fetched 2026-09-24.
-Upstream's dependency pins and GPU requirements are retained. This branch needs
+Upstream's GPU requirements and dependency pins are retained except for renderers,
+advanced to upstream `20f2b380c03748c1c9c39deac7edcb2ec6a7be72` (#158). This branch needs
 its own current-upstream image; the older Delta training image is not compatible.
 
 ## Retained extensions
@@ -35,6 +36,21 @@ legacy environment-budget patch, parser override, and old Docker overlay are not
 ported. Score centering remains on `codex/score-centering`; this branch does not
 expose it. It requires a separate port of its sampler-distribution calculation.
 
+## Qwen3.5 reasoning convention
+
+The renderer pin adopts upstream's vLLM 0.26 parity convention, without a local
+parser override. A tool-call opener ends an open reasoning region if the sampled
+completion contains no explicit reasoning-close marker. If an explicit closing
+marker is present later, the preceding tool text remains reasoning. With neither
+boundary, the response stays unfinished reasoning. The actual prompt tokens,
+not just `enable_thinking`, establish the initial channel.
+
+Upstream's next-turn bridge preserves the sampled prefix and does not insert an
+extra thinking close for a tool call that already ended reasoning. This changes
+parsing and the tool/reward path; it does not force the model to generate
+`</think>`. The version refers to the parsing convention, not a vLLM downgrade:
+the branch retains current PrimeRL's newer vLLM requirement for sampling replay.
+
 ## Configuration fragment
 
 Merge `integration/grouped-rubrics/overrides.toml` into a complete run config.
@@ -58,3 +74,8 @@ the tested packing, transport types, loss functions, and config classes were the
 actual branch sources. This is not GPU/distributed integration validation. Native
 Qwen3.5 execution, fused kernels, CPU optimizer offload, sampling replay against
 vLLM, and a complete grouped-rubric rollout still require the new runtime image.
+
+Renderer update validation: 39 upstream Qwen3.5 reasoning-boundary tests passed
+using the local 2B SFT checkpoint tokenizer, offline. These cover implicit tool
+boundaries, explicit-close precedence, prompt-derived state, unfinished output,
+and prefix-preserving next-turn bridges. No live vLLM/GPU validation was performed.
