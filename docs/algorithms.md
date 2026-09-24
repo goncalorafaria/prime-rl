@@ -190,6 +190,21 @@ $$
 
 The orchestrator stamps each sample's component membership as per-token weight streams (`rl_weights` / `ce_weights` / `ref_kl_weights` on the wire): a weight scales that component's per-token loss, `0.0` leaves the token out of the component entirely (mask *and* denominator), and components may overlap on the same token — their gradients sum. Each $N$ is the global (all-reduced) count of that component's member tokens, so the components don't dilute each other: adding echo observation tokens never changes the rl term's effective per-token learning rate, and an sft env packed next to a GRPO env doesn't soften its gradient. Tokens of different components pack freely into the same micro batch, and a plain GRPO run ships no weight streams at all (absent streams mean rl weight 1.0 on every trainable token — the unchanged hot path). Advantages always ship per token (`advantages` on the wire), assigned as per-token streams from the start — uniform group credit is broadcast over completion tokens at assignment; algorithms with no rl credit (opd, opsd) ship none.
 
+### RL reduction
+
+`trainer.loss.aggregation = "token_mean"` uses the global token means above.
+Set `aggregation = "group_token_mean"` to average the RL component within each
+rollout dispatch group, then equally average the nonempty groups in the training
+batch. The denominator counts eligible RL tokens after truncation and component
+routing, before loss-specific trust-region rejection. Nonzero component weights
+scale the numerator; zero weights exclude tokens. Partial groups use the members
+present in that batch. CE and reference-KL retain global token normalization.
+
+Group reduction applies to IPO, IcePop, and custom RL losses. Custom losses must
+return a token sum. The orchestrator supplies group denominators across all DP
+workers; CP replication is accounted for by the trainer. Group mode rejects
+batches without this metadata, including the synthetic fake-data loader.
+
 ### IPO Loss
 
 The default RL loss is Importance Policy Optimization (IPO). It combines an importance-weighted policy-gradient term with a squared log-ratio KL regularizer. A symmetric trust region removes tokens whose absolute probability change exceeds $\epsilon$:

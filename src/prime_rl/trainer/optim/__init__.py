@@ -136,6 +136,7 @@ def _create_optimizer(
                 lr=lr,
                 weight_decay=config.weight_decay,
                 betas=(config.betas1, config.betas2),
+                eps=config.eps,
                 fused=fused_adamw,
             )
         case "muon":

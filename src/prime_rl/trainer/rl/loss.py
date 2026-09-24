@@ -315,6 +315,8 @@ def compute_loss(
     rl_scale: int,
     ce_scale: int,
     ref_kl_scale: int,
+    rl_group_denominators: list[int] | None = None,
+    cp_size: int = 1,
 ) -> tuple[Float[Tensor, ""], dict[str, Any]]:
     """
     Compute loss for packed sequences (batch size = 1, multiple sequences packed along sequence dimension).
@@ -346,6 +348,8 @@ def compute_loss(
         rl_scale: Global rl-token count normalizing the rl component
         ce_scale: Global ce-token count normalizing the ce component
         ref_kl_scale: Global ref_kl-token count normalizing the ref_kl component
+        rl_group_denominators: Optional per-sequence G * T_g from the complete packed batch
+        cp_size: Replication factor for full-sequence losses after CP logprob gathering
 
     Returns:
         Tuple of (scaled_loss, aggregated_metrics)
@@ -353,6 +357,14 @@ def compute_loss(
     all_metrics: dict[str, list[Tensor]] = {}
 
     n = len(trainer_logprobs)
+    if rl_group_denominators is not None:
+        if len(rl_group_denominators) != n or any(d <= 0 for d in rl_group_denominators):
+            raise ValueError("Expected one positive RL group denominator per sequence")
+        if cp_size < 1:
+            raise ValueError("cp_size must be positive")
+        rl_divisors = [d * cp_size for d in rl_group_denominators]
+    else:
+        rl_divisors = [1] * n
     if ref_logprobs is None:
         ref_logprobs = [None] * n
     if rl_weights is None:
@@ -375,7 +387,7 @@ def compute_loss(
     rl_loss = trainer_logprobs[0].sum() * 0.0
     ce_loss = 0.0
     ref_kl_loss = 0.0
-    for t_logp, i_logp, ref_logp, adv, mask, rl_w, ce_w, ref_kl_w in zip(
+    for t_logp, i_logp, ref_logp, adv, mask, rl_w, ce_w, ref_kl_w, rl_divisor in zip(
         trainer_logprobs,
         inference_logprobs,
         ref_logprobs,
@@ -384,6 +396,8 @@ def compute_loss(
         rl_weights,
         ce_weights,
         ref_kl_weights,
+        rl_divisors,
+        strict=True,
     ):
 
         def make_inputs(component_mask: Bool[Tensor, " seq"], weights: Float[Tensor, " seq"] | None) -> LossInputs:
@@ -397,11 +411,11 @@ def compute_loss(
             )
 
         if rl_w is None:
-            rl_loss = rl_loss + run_loss_fn(rl_loss_fn.loss, make_inputs(mask, None))
+            rl_loss = rl_loss + run_loss_fn(rl_loss_fn.loss, make_inputs(mask, None)) / rl_divisor
         else:
             rl_mask = mask & (rl_w != 0)
             if bool(rl_mask.any()):
-                rl_loss = rl_loss + run_loss_fn(rl_loss_fn.loss, make_inputs(rl_mask, rl_w))
+                rl_loss = rl_loss + run_loss_fn(rl_loss_fn.loss, make_inputs(rl_mask, rl_w)) / rl_divisor
         if ce_w is not None:
             ce_mask = ce_w != 0
             if bool(ce_mask.any()):
@@ -411,7 +425,11 @@ def compute_loss(
             if bool(ref_kl_mask.any()):
                 ref_kl_loss = ref_kl_loss + run_loss_fn(ref_kl_loss_fn, make_inputs(ref_kl_mask, ref_kl_w))
 
-    scaled_loss = rl_loss / rl_scale + ce_loss / ce_scale + ref_kl_loss / ref_kl_scale
+    scaled_loss = (
+        rl_loss / (1 if rl_group_denominators is not None else rl_scale)
+        + ce_loss / ce_scale
+        + ref_kl_loss / ref_kl_scale
+    )
 
     aggregated: dict[str, Any] = {}
     for k, v in all_metrics.items():

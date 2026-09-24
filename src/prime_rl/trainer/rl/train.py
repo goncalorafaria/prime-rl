@@ -286,6 +286,10 @@ def train(config: TrainerConfig):
         load_data_time = time.perf_counter() - load_data_start_time
         logger.debug(f"Loaded batch in {format_time(load_data_time)}")
 
+        group_mean = config.loss.aggregation == "group_token_mean"
+        if group_mean and any(mb.get("rl_group_denominators") is None for mb in micro_batches):
+            raise ValueError("group_token_mean requires dispatch-group metadata from the orchestrator")
+
         batch_size = len(micro_batches)
         memory_profiler = None
         if config.memory_profiler_path is not None:
@@ -489,6 +493,8 @@ def train(config: TrainerConfig):
                 rl_scale=rl_scale,
                 ce_scale=ce_scale,
                 ref_kl_scale=ref_kl_scale,
+                rl_group_denominators=micro_batch["rl_group_denominators"] if group_mean else None,
+                cp_size=cp_size,
             )
 
             # Backward pass

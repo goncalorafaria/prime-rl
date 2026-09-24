@@ -514,6 +514,9 @@ class SGDConfig(BaseOptimizerConfig):
 class AdamWConfig(BaseOptimizerConfig):
     type: Literal["adamw"] = "adamw"
 
+    eps: float = Field(1e-8, gt=0, allow_inf_nan=False)
+    """AdamW denominator epsilon, including CPU optimizer offload."""
+
     betas1: float = Field(0.9, ge=0)
     """Adam first-moment (β1) decay."""
 
@@ -569,7 +572,14 @@ class CheckpointConfig(BaseConfig):
     """Skip loading the optimizer state from checkpoint."""
 
 
-class IPOLossConfig(BaseConfig):
+class BaseRLLossConfig(BaseConfig):
+    aggregation: Literal["token_mean", "group_token_mean"] = "token_mean"
+    """Normalize RL by active tokens, or equally average rollout-group token means.
+    CE and reference-KL components retain their own global token means.
+    """
+
+
+class IPOLossConfig(BaseRLLossConfig):
     type: Literal["ipo"] = "ipo"
     eps: float = Field(0.3, ge=0)
     """Maximum absolute probability change before a token is masked."""
@@ -581,7 +591,7 @@ class IPOLossConfig(BaseConfig):
     """Temperature for the KL term."""
 
 
-class IcePopLossConfig(BaseConfig):
+class IcePopLossConfig(BaseRLLossConfig):
     type: Literal["icepop"] = "icepop"
 
     ratio_low: float = Field(0.2, gt=0)
@@ -600,7 +610,7 @@ class IcePopLossConfig(BaseConfig):
         return self
 
 
-class CustomLossConfig(BaseConfig):
+class CustomLossConfig(BaseRLLossConfig):
     type: Literal["custom"] = "custom"
 
     import_path: str
