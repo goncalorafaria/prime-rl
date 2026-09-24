@@ -121,6 +121,8 @@ def trace_to_samples(
                 token_ids=token_ids,
                 mask=mask,
                 logprobs=branch.logprobs,
+                sampler_head_ids=branch.sampler_head_ids,
+                sampler_head_logprobs=branch.sampler_head_logprobs,
                 temperatures=[],  # filled by TrainSink.process_group
                 env_name=env_name,
                 mm_kwargs=mm_kwargs,

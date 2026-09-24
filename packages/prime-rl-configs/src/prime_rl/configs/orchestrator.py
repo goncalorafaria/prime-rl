@@ -50,6 +50,9 @@ class ModelConfig(BaseModelConfig):
 
 
 class TrainSamplingConfig(BaseConfig):
+    score_centering_top_k: int | None = Field(None, ge=1)
+    """Record sampler top-k probabilities for score centering. Requires token-in/out inference."""
+
     top_p: float = Field(1.0, gt=0, le=1.0)
     """Nucleus sampling threshold forwarded to training rollout inference."""
 
@@ -77,6 +80,8 @@ class TrainSamplingConfig(BaseConfig):
             "top_p": self.top_p,
             "logprobs": True,
         }
+        if self.score_centering_top_k is not None:
+            args["score_centering_top_k"] = self.score_centering_top_k
         if self.max_completion_tokens is not None:
             args["max_completion_tokens"] = self.max_completion_tokens
 

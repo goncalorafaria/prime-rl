@@ -71,6 +71,8 @@ class TrainingSample(msgspec.Struct, array_like=True, gc=False, omit_defaults=Tr
     # Rollout-group identity used by the packer to derive group-balanced loss
     # normalization after filtering and truncation.
     group_id: str | None = None
+    sampler_head_ids: list[list[int]] | None = None
+    sampler_head_logprobs: list[list[float]] | None = None
 
 
 class TrainingBatch(msgspec.Struct, array_like=True, gc=False, omit_defaults=True):
@@ -118,3 +120,5 @@ class MicroBatch(msgspec.Struct, array_like=True, gc=False, omit_defaults=True):
     # entries from the same rollout group carry the same count.
     rl_group_token_counts: list[int] | None = None
     rl_num_groups: int | None = None
+    sampler_head_ids: list[list[int]] | None = None
+    sampler_head_logprobs: list[list[float]] | None = None

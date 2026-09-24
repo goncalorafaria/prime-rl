@@ -30,6 +30,7 @@ from prime_rl.configs.trainer import (
     FakeDataLoaderConfig,
     TokenizerConfig,
     TrainerConfig,
+    uses_score_centering,
 )
 from prime_rl.configs.trainer import (
     FileSystemWeightBroadcastConfig as TrainerFileSystemWeightBroadcastConfig,
@@ -361,6 +362,27 @@ class RLConfig(BaseConfig):
         return propagate_shared_fields(data)
 
     ### Validate shared configs (after sub-config construction)
+
+    @model_validator(mode="after")
+    def validate_score_centering_sampler(self):
+        if uses_score_centering(self.trainer.loss):
+            sources = self.orchestrator.train.source
+            for source in sources:
+                if source.is_legacy:
+                    raise ValueError("score_centering requires the v1 token-in/out rollout path")
+                if source.sampling.score_centering_top_k is None:
+                    raise ValueError("score_centering requires orchestrator.train.sampling.score_centering_top_k")
+                if source.sampling.temperature <= 0:
+                    raise ValueError("score_centering requires a positive sampling temperature")
+            if self.inference is not None:
+                requested = max((s.sampling.score_centering_top_k or 0 for s in sources), default=0)
+                extra = self.inference.vllm_extra
+                if extra.get("logprobs_mode", "processed_logprobs") != "processed_logprobs":
+                    raise ValueError("score_centering requires processed sampler logprobs")
+                limit = extra.get("max_logprobs", 20)
+                if limit != -1 and limit < requested:
+                    raise ValueError("Set inference.vllm_extra.max_logprobs >= score_centering_top_k")
+        return self
 
     @model_validator(mode="after")
     def validate_shared_configs(self):

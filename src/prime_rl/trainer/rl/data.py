@@ -27,6 +27,8 @@ class TensorMicroBatch(TypedDict):
     advantages: Float[Tensor, "batch seq"]
     inference_logprobs: Float[Tensor, "batch seq"]
     ref_logprobs: Float[Tensor, "batch seq"] | None
+    sampler_head_ids: Tensor | None
+    sampler_head_logprobs: Tensor | None
     loss_mask: Bool[Tensor, "batch seq"]
     temperatures: Float[Tensor, "batch seq"]  # Per-token temperatures
     env_names: list[str]
@@ -252,7 +254,17 @@ class DataLoader:
                 .to(torch.int32)
                 .unsqueeze(0)
             )
+        head_ids = head_logps = None
+        if micro_batch.sampler_head_ids is not None:
+            k = max(1, max(map(len, micro_batch.sampler_head_ids), default=0))
+            head_ids = torch.full((1, len(micro_batch.input_ids), k), -1, dtype=torch.long)
+            head_logps = torch.zeros((1, len(micro_batch.input_ids), k), dtype=torch.float)
+            for i, (ids, logps) in enumerate(zip(micro_batch.sampler_head_ids, micro_batch.sampler_head_logprobs)):
+                head_ids[0, i, : len(ids)] = torch.tensor(ids, dtype=torch.long)
+                head_logps[0, i, : len(ids)] = torch.tensor(logps, dtype=torch.float)
         return TensorMicroBatch(
+            sampler_head_ids=head_ids,
+            sampler_head_logprobs=head_logps,
             input_ids=torch.tensor(micro_batch.input_ids, dtype=torch.long).unsqueeze(0),
             position_ids=torch.tensor(micro_batch.position_ids, dtype=torch.long).unsqueeze(0),
             advantages=torch.tensor(micro_batch.advantages, dtype=torch.float).unsqueeze(0),

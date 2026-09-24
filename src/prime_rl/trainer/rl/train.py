@@ -17,7 +17,8 @@ from prime_rl.trainer.ckpt import setup_ckpt_managers
 from prime_rl.trainer.multi_ckpt import setup_multi_checkpoint_manager
 from prime_rl.trainer.optim import setup_optimizer, setup_multi_optimizer
 from prime_rl.trainer.scheduler import setup_scheduler, setup_multi_scheduler
-from prime_rl.configs.trainer import TrainerConfig
+from prime_rl.configs.trainer import TrainerConfig, uses_score_centering
+from prime_rl.trainer.rl.score_centering import dppo_score_correction
 from prime_rl.trainer.rl.data import DataLoader, FakeDataLoader
 from prime_rl.utils.cp import (
     gather_for_cp,
@@ -384,6 +385,17 @@ def train(config: TrainerConfig):
 
             seq_lens = micro_batch["seq_lens"].to("cuda")
 
+            head_ids = head_logps = None
+            active_rl = loss_mask if rl_weights is None else loss_mask & (rl_weights != 0)
+            if uses_score_centering(config.loss) and bool(active_rl.any()):
+                if micro_batch.get("sampler_head_ids") is None:
+                    raise ValueError(
+                        "Score centering requires sampler top-k data; enable orchestrator.train.sampling.score_centering_top_k"
+                    )
+                head_ids = micro_batch["sampler_head_ids"].to("cuda")
+                head_logps = micro_batch["sampler_head_logprobs"].to("cuda")
+                if bool((active_rl & ~(head_ids >= 0).any(-1)).any()):
+                    raise ValueError("Score centering requires a sampler head for each active RL token")
             labels = shift_tensor_left(input_ids)
 
             seq_lens_are_pre_shard = False
@@ -445,12 +457,38 @@ def train(config: TrainerConfig):
                 logits = out["logits"]
                 # Per-token temperature scaling: temperatures is [batch, seq], logits is [batch, seq, vocab]
                 scaled_logits = logits / temperatures.unsqueeze(-1)
+                if head_ids is not None:
+                    scaled_logits = scaled_logits.float()
                 out["logprobs"] = selective_log_softmax(scaled_logits, labels)
                 out["entropy"] = compute_entropy(scaled_logits)
+                if head_ids is not None:
+                    # Labels and sampler heads name the next token at this position.
+                    shifted_ids = torch.cat([head_ids[:, 1:], torch.full_like(head_ids[:, :1], -1)], dim=1)
+                    if cp_enabled:
+                        shifted_ids = shard_for_cp(shifted_ids, cp_rank=cp_rank, cp_world_size=cp_size)
+                    log_z = torch.logsumexp(scaled_logits.float(), dim=-1, keepdim=True)
+                    out["head_logprobs"] = scaled_logits.float().gather(-1, shifted_ids.clamp_min(0)) - log_z
+                    if getattr(config.loss, "score_centering", False):
+                        shifted_q = torch.cat([head_logps[:, 1:], torch.zeros_like(head_logps[:, :1])], dim=1)
+                        shifted_adv = shift_tensor_left(advantages)
+                        shifted_active = shift_tensor_left(active_rl)
+                        if cp_enabled:
+                            shifted_q = shard_for_cp(shifted_q, cp_rank=cp_rank, cp_world_size=cp_size)
+                            shifted_adv = shard_for_cp(shifted_adv, cp_rank=cp_rank, cp_world_size=cp_size)
+                            shifted_active = shard_for_cp(shifted_active, cp_rank=cp_rank, cp_world_size=cp_size)
+                        out["score_correction"] = dppo_score_correction(
+                            scaled_logits, shifted_ids, shifted_q, shifted_adv, shifted_active,
+                            low=config.loss.dppo_mask_low, high=config.loss.dppo_mask_high,
+                        )
+
             # else: FusedOutputLinear was used - logprobs already computed with per-token temperatures
 
             if cp_enabled:
                 out["logprobs"] = gather_for_cp(out["logprobs"], cp_group)
+                if head_ids is not None:
+                    out["head_logprobs"] = gather_for_cp(out["head_logprobs"], cp_group)
+                if "score_correction" in out:
+                    out["score_correction"] = gather_for_cp(out["score_correction"], cp_group)
                 out["entropy"] = gather_for_cp_wo_grad(out["entropy"], cp_size, cp_group)
 
             vocab_size = getattr(model.config, "vocab_size", None) or model.config.text_config.vocab_size
@@ -460,6 +498,15 @@ def train(config: TrainerConfig):
             )
             out["entropy"] = shift_tensor_right(
                 out["entropy"], pad_value=torch.log(torch.tensor(float(vocab_size))).item()
+            )
+
+            head_trainer = None
+            if head_ids is not None:
+                raw_head = out["head_logprobs"]
+                head_trainer = torch.cat([torch.zeros_like(raw_head[:, :1]), raw_head[:, :-1]], dim=1)
+
+            score_correction = (
+                shift_tensor_right(out["score_correction"]) if "score_correction" in out else None
             )
 
             # Compute loss
@@ -473,6 +520,13 @@ def train(config: TrainerConfig):
                 rl_weights=rl_weights.squeeze().split(sequence_lengths) if rl_weights is not None else None,
                 ce_weights=ce_weights.squeeze().split(sequence_lengths) if ce_weights is not None else None,
                 ref_kl_weights=ref_kl_weights.squeeze().split(sequence_lengths) if ref_kl_weights is not None else None,
+                trainer_head_logprobs=head_trainer.squeeze(0).split(sequence_lengths)
+                if head_trainer is not None
+                else None,
+                sampler_head_logprobs=head_logps.squeeze(0).split(sequence_lengths) if head_logps is not None else None,
+                sampler_head_ids=head_ids.squeeze(0).split(sequence_lengths) if head_ids is not None else None,
+                score_corrections=score_correction.squeeze(0).split(sequence_lengths)
+                if score_correction is not None else None,
                 rl_loss_fn=rl_loss_fn,
                 rl_scale=rl_scale,
                 ce_scale=ce_scale,

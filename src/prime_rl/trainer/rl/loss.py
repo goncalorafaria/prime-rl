@@ -6,7 +6,13 @@ from beartype import beartype as typechecker
 from jaxtyping import Bool, Float, Int, jaxtyped
 from torch import Tensor
 
-from prime_rl.configs.trainer import CustomLossConfig, DefaultLossConfig, IPOLossConfig, LossConfig
+from prime_rl.configs.trainer import (
+    CustomLossConfig,
+    DefaultLossConfig,
+    IPOLossConfig,
+    LossConfig,
+    ScoreCenteringLossConfig,
+)
 from prime_rl.utils.utils import import_object
 
 
@@ -26,6 +32,10 @@ class LossInputs:
     advantages: Float[Tensor, " seq"]
     loss_mask: Bool[Tensor, " seq"]
     loss_weights: Float[Tensor, " seq"] | None = field(default=None)
+    trainer_head_logprobs: Tensor | None = None
+    sampler_head_logprobs: Tensor | None = None
+    sampler_head_ids: Tensor | None = None
+    score_correction: Tensor | None = None
 
 
 @dataclass
@@ -144,6 +154,17 @@ def default_loss_fn(inputs: LossInputs, loss_config: DefaultLossConfig) -> LossO
     pg_loss = keep_mask * advantages * importance_ratio
     kl_loss = loss_mask * log_importance_ratio**2
     per_token_loss = -pg_loss + loss_config.kl_tau * kl_loss
+    if loss_config.score_centering:
+        correction = inputs.score_correction
+        if correction is None:
+            if bool(loss_mask.any()):
+                raise ValueError("score_centering requires the trainer's masked-score correction")
+        else:
+            # A masked sampled action still receives the expected-score correction.
+            # Keep the reported objective value unchanged; only alter its gradient.
+            per_token_loss = per_token_loss + torch.where(
+                loss_mask, advantages * (correction - correction.detach()), 0.0
+            )
     if inputs.loss_weights is not None:
         per_token_loss = per_token_loss * inputs.loss_weights
     loss = per_token_loss.sum()
@@ -259,6 +280,36 @@ def ce_loss_fn(inputs: LossInputs) -> LossOutputs:
     return LossOutputs(loss=loss, metrics=metrics)
 
 
+def score_centering_loss_fn(inputs: LossInputs, loss_config: ScoreCenteringLossConfig) -> LossOutputs:
+    from prime_rl.trainer.rl.score_centering import centered_logprob
+
+    head_logp = inputs.trainer_head_logprobs
+    head_logq = inputs.sampler_head_logprobs
+    head_ids = inputs.sampler_head_ids
+    if head_logp is None or head_logq is None or head_ids is None:
+        raise ValueError("Score centering requires sampler top-k probabilities recorded during generation")
+    mask = inputs.loss_mask
+    if bool(((head_ids >= 0).sum(-1)[mask] == 0).any()):
+        raise ValueError("Missing sampler top-k probabilities on an active RL token")
+    # Exclude context/padding before evaluating ratios (their logprobs are placeholders).
+    surrogate, metrics = centered_logprob(
+        inputs.trainer_logprobs[mask],
+        inputs.inference_logprobs[mask],
+        head_logp[mask],
+        head_logq[mask],
+        head_ids[mask] >= 0,
+        weighting=loss_config.weighting,
+        cap=loss_config.cap,
+        low=loss_config.low,
+        high=loss_config.high,
+        eps=loss_config.eps,
+    )
+    loss = -inputs.advantages[mask].detach() * surrogate
+    if inputs.loss_weights is not None:
+        loss = loss * inputs.loss_weights[mask]
+    return LossOutputs(loss=loss.sum(), metrics={k: v.mean() for k, v in metrics.items()})
+
+
 def setup_rl_loss_fn(loss_config: LossConfig) -> LossFn:
     """Build the loss fn for the rl component from ``trainer.loss``:
     ``default_loss_fn`` (``DefaultLossConfig``), ``ipo_loss_fn``
@@ -270,6 +321,10 @@ def setup_rl_loss_fn(loss_config: LossConfig) -> LossFn:
 
         def rl_fn(inputs: LossInputs) -> LossOutputs:
             return custom_fn(inputs, **kwargs)
+    elif isinstance(loss_config, ScoreCenteringLossConfig):
+
+        def rl_fn(inputs: LossInputs) -> LossOutputs:
+            return score_centering_loss_fn(inputs, loss_config)
     elif isinstance(loss_config, IPOLossConfig):
 
         def rl_fn(inputs: LossInputs) -> LossOutputs:
@@ -299,6 +354,10 @@ def compute_loss(
     rl_group_token_counts: list[int] | None = None,
     rl_num_groups: int | None = None,
     rl_group_count_scale: int = 1,
+    trainer_head_logprobs: list[Tensor] | None = None,
+    sampler_head_logprobs: list[Tensor] | None = None,
+    sampler_head_ids: list[Tensor] | None = None,
+    score_corrections: list[Tensor] | None = None,
 ) -> tuple[Float[Tensor, ""], dict[str, Any]]:
     """
     Compute loss for packed sequences (batch size = 1, multiple sequences packed along sequence dimension).
@@ -342,6 +401,10 @@ def compute_loss(
     all_metrics: dict[str, list[Tensor]] = {}
 
     n = len(trainer_logprobs)
+    score_corrections = score_corrections if score_corrections is not None else [None] * n
+    trainer_head_logprobs = trainer_head_logprobs if trainer_head_logprobs is not None else [None] * n
+    sampler_head_logprobs = sampler_head_logprobs if sampler_head_logprobs is not None else [None] * n
+    sampler_head_ids = sampler_head_ids if sampler_head_ids is not None else [None] * n
     if rl_aggregation not in {"token_mean", "group_token_mean"}:
         raise ValueError(f"Unknown RL loss aggregation: {rl_aggregation}")
     if rl_aggregation == "group_token_mean":
@@ -375,7 +438,7 @@ def compute_loss(
     ce_loss = 0.0
     ref_kl_loss = 0.0
     group_counts = rl_group_token_counts or [0] * n
-    for t_logp, i_logp, ref_logp, adv, mask, rl_w, ce_w, ref_kl_w, group_count in zip(
+    for t_logp, i_logp, ref_logp, adv, mask, rl_w, ce_w, ref_kl_w, group_count, head_p, head_q, head_ids, correction in zip(
         trainer_logprobs,
         inference_logprobs,
         ref_logprobs,
@@ -385,6 +448,10 @@ def compute_loss(
         ce_weights,
         ref_kl_weights,
         group_counts,
+        trainer_head_logprobs,
+        sampler_head_logprobs,
+        sampler_head_ids,
+        score_corrections,
     ):
 
         def make_inputs(component_mask: Bool[Tensor, " seq"], weights: Float[Tensor, " seq"] | None) -> LossInputs:
@@ -395,6 +462,10 @@ def compute_loss(
                 advantages=adv,
                 loss_mask=component_mask,
                 loss_weights=weights,
+                trainer_head_logprobs=head_p,
+                sampler_head_logprobs=head_q,
+                sampler_head_ids=head_ids,
+                score_correction=correction,
             )
 
         if rl_w is None:

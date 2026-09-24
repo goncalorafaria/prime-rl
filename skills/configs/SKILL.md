@@ -108,3 +108,9 @@ Set `top_p` directly under `[orchestrator.train.sampling]`, for example
 `top_p = 0.97`. The valid range is `(0, 1]`; the default is `1.0`.
 Do not put `top_p` in `sampling.extra_body`: renderer clients prioritize the
 explicit sampling fields. Configuration validation rejects that placement.
+
+## Score centering
+
+For the current DPPO stack, set `trainer.loss.score_centering = true` with `type = "default"`; keep `aggregation = "group_token_mean"` for per-group token means. The flag is off by default and preserves DPPO masking and KL. Both this flag and the standalone `trainer.loss.type = "score_centering"` require the sampler head: use the v1 token-in/out rollout path, set `trainer.model.fused_lm_head_token_chunk_size = "disabled"`, and enable `orchestrator.train.sampling.score_centering_top_k` (typically128). The inference service must expose at least that many processed logprobs (`inference.vllm_extra.max_logprobs`) from the actual sampling policy. See `docs/score-centering.md` for weighting modes and the required renderer/verifier data path. Missing sampling evidence is an error; do not substitute trainer probabilities or rescore stale rollouts with current weights.
+
+For isolated CPU score-centering checks in a reused environment, disable unrelated pytest plugin auto-loading (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`), use `--noconftest -c /dev/null -p no:cacheprovider`, and limit `TORCHINDUCTOR_COMPILE_THREADS=1`. The repository-wide test fixtures manage trainer/inference processes and are not needed for these pure loss/config checks.

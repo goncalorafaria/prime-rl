@@ -459,6 +459,9 @@ class CheckpointConfig(BaseConfig):
 class DefaultLossConfig(BaseConfig):
     type: Literal["default"] = "default"
 
+    score_centering: bool = False
+    """Center the masked importance-weighted score using sampler top-k probabilities."""
+
     aggregation: Literal["token_mean", "group_token_mean"] = "token_mean"
     """Loss reduction. ``token_mean`` averages over all active RL tokens;
     ``group_token_mean`` averages tokens within each rollout group, then
@@ -489,6 +492,16 @@ class IPOLossConfig(BaseConfig):
     """Temperature for the KL term."""
 
 
+class ScoreCenteringLossConfig(BaseConfig):
+    type: Literal["score_centering"] = "score_centering"
+    aggregation: Literal["token_mean", "group_token_mean"] = "token_mean"
+    weighting: Literal["none", "is", "tis", "mis"] = "none"
+    cap: float = Field(2.0, ge=1.0)
+    low: float = Field(0.2, gt=0, le=1.0)
+    high: float = Field(5.0, ge=1.0)
+    eps: float = Field(1e-6, gt=0, lt=1)
+
+
 class CustomLossConfig(BaseConfig):
     type: Literal["custom"] = "custom"
 
@@ -499,7 +512,15 @@ class CustomLossConfig(BaseConfig):
     """Kwargs forwarded to the loss function."""
 
 
-LossConfig: TypeAlias = Annotated[DefaultLossConfig | IPOLossConfig | CustomLossConfig, Field(discriminator="type")]
+LossConfig: TypeAlias = Annotated[
+    DefaultLossConfig | IPOLossConfig | ScoreCenteringLossConfig | CustomLossConfig, Field(discriminator="type")
+]
+
+
+def uses_score_centering(loss: LossConfig) -> bool:
+    return isinstance(loss, ScoreCenteringLossConfig) or (
+        isinstance(loss, DefaultLossConfig) and loss.score_centering
+    )
 
 
 class FakeDataLoaderConfig(BaseConfig):
@@ -651,6 +672,13 @@ class TrainerConfig(BaseConfig):
                 stacklevel=1,
             )
             self.optim.max_norm = None
+        return self
+
+    @model_validator(mode="after")
+    def score_centering_requires_logits(self):
+        if uses_score_centering(self.loss):
+            if self.model.fused_lm_head_token_chunk_size != "disabled":
+                raise ValueError("score_centering requires model.fused_lm_head_token_chunk_size='disabled'")
         return self
 
     @model_validator(mode="after")

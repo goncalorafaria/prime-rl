@@ -325,3 +325,70 @@ def _dummy_custom_loss(inputs: LossInputs, multiplier: float = 1.0) -> LossOutpu
         loss=loss,
         metrics={"custom_metric": torch.tensor(multiplier)},
     )
+
+
+@pytest.mark.parametrize("score_centering", [False, True])
+@pytest.mark.parametrize("kl_tau", [0.0, 0.3])
+def test_optional_sc_preserves_group_reduction_and_kl(score_centering, kl_tau):
+    from prime_rl.trainer.rl.score_centering import dppo_score_correction
+
+    z = torch.tensor([[0.3, -0.7, 1.2, 0.5]] * 5, dtype=torch.float64, requires_grad=True)
+    lp = z.log_softmax(-1)
+    p = lp.detach().exp()
+    q = torch.tensor([[0.6, 0.15, 0.1, 0.15]] * 5, dtype=z.dtype)
+    actions = torch.tensor([2, 0, 0, 2, 3])
+    rows = torch.arange(5)
+    adv = torch.tensor([1.0, -0.7, -0.5, 1.2, 0.9], dtype=z.dtype)
+    weights = torch.tensor([1.0, 0.0, 0.5, 1.0, 2.0], dtype=z.dtype)
+    active = weights != 0
+    correction = dppo_score_correction(
+        z, torch.arange(4).expand(5, -1), q.log(), adv, active, low=0.1, high=0.1
+    )
+    config = DefaultLossConfig(
+        score_centering=score_centering, aggregation="group_token_mean",
+        dppo_mask_low=0.1, dppo_mask_high=0.1, adv_tau=0.7, kl_tau=kl_tau,
+    )
+    loss, _ = compute_loss(
+        trainer_logprobs=lp[rows, actions].split([2, 3]),
+        inference_logprobs=q.log()[rows, actions].split([2, 3]),
+        ref_logprobs=None, advantages=adv.split([2, 3]),
+        loss_mask=torch.ones(5, dtype=torch.bool).split([2, 3]),
+        rl_weights=weights.split([2, 3]), ce_weights=None, ref_kl_weights=None,
+        rl_loss_fn=setup_rl_loss_fn(config), rl_scale=4, ce_scale=1, ref_kl_scale=1,
+        rl_aggregation=config.aggregation, rl_group_token_counts=[1, 3], rl_num_groups=2,
+        score_corrections=correction.split([2, 3]),
+    )
+    keep = torch.where(adv[:, None] > 0, p - q <= 0.1, p - q >= -0.1)
+    scores = torch.eye(4, dtype=z.dtype)[None] - p[:, None, :]
+    ratio = p[rows, actions] / q[rows, actions]
+    log_ratio = ratio.log()
+    drift = (p[:, :, None] * keep[:, :, None] * scores).sum(1)
+    expected = -0.7 * adv[:, None] * ratio[:, None] * keep[rows, actions, None] * scores[rows, actions]
+    if score_centering:
+        expected += 0.7 * adv[:, None] * drift
+    expected += 2 * kl_tau * log_ratio[:, None] * scores[rows, actions]
+    reduction = weights / torch.tensor([1, 1, 3, 3, 3], dtype=z.dtype) / 2
+    expected *= reduction[:, None]
+    torch.testing.assert_close(torch.autograd.grad(loss, z)[0], expected)
+    baseline_value = ((-0.7 * adv * ratio * keep[rows, actions] + kl_tau * log_ratio.square()) * reduction).sum()
+    torch.testing.assert_close(loss, baseline_value)
+
+
+def test_optional_sc_config_and_missing_correction():
+    from prime_rl.configs.trainer import TrainerConfig, uses_score_centering
+
+    assert not uses_score_centering(DefaultLossConfig())
+    assert uses_score_centering(DefaultLossConfig(score_centering=True))
+    with pytest.raises(ValueError, match="fused_lm_head"):
+        TrainerConfig(loss={"score_centering": True})
+    config = TrainerConfig(
+        loss={"score_centering": True, "aggregation": "group_token_mean"},
+        model={"fused_lm_head_token_chunk_size": "disabled"},
+    )
+    inputs = LossInputs(
+        trainer_logprobs=torch.tensor([-0.7]), inference_logprobs=torch.tensor([-0.8]),
+        ref_logprobs=None, advantages=torch.ones(1), loss_mask=torch.ones(1, dtype=torch.bool),
+    )
+    setup_rl_loss_fn(DefaultLossConfig())(inputs)
+    with pytest.raises(ValueError, match="masked-score correction"):
+        setup_rl_loss_fn(config.loss)(inputs)

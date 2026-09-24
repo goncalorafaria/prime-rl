@@ -1,0 +1,20 @@
+version: v2
+description: Prime-RL score-centering group-token-mean loss checks
+tasks:
+- name: tests
+  image:
+    beaker: runtime
+  command: [bash, /gscratch/ark/graf/prime-rl-shardcast-base/deploy/score-centering/test-stack.sh]
+  resources:
+    gpuCount: 0
+    cpuCount: 2
+    memory: 8 GiB
+  datasets:
+  - mountPath: /gscratch/ark/graf
+    source:
+      hostPath: /gscratch/ark/graf
+  - mountPath: /mmfs1/gscratch/ark/graf
+    source:
+      hostPath: /mmfs1/gscratch/ark/graf
+  result:
+    path: /results
