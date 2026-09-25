@@ -86,6 +86,8 @@ class TrainingSample(msgspec.Struct, array_like=True, gc=False, omit_defaults=Tr
     trace_id: str | None = None
     branch_index: int | None = None
     group_id: str | None = None  # Dispatch group, shared by all of its rollout branches.
+    sampler_head_ids: list[list[int]] | None = None
+    sampler_head_logprobs: list[list[float]] | None = None
 
 
 # Orchestrator -> Trainer
@@ -128,3 +130,5 @@ class MicroBatch(msgspec.Struct, array_like=True, gc=False, omit_defaults=True):
     # Per-sequence G * T_g: active group count times that group's RL token count,
     # computed over the complete batch after truncation and before DP distribution.
     rl_group_denominators: list[int] | None = None
+    sampler_head_ids: list[list[int]] | None = None
+    sampler_head_logprobs: list[list[float]] | None = None

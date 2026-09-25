@@ -27,6 +27,7 @@ class LossInputs:
     advantages: Float[Tensor, " seq"]
     loss_mask: Bool[Tensor, " seq"]
     loss_weights: Float[Tensor, " seq"] | None = field(default=None)
+    score_correction: Float[Tensor, " seq"] | None = None
 
 
 @dataclass
@@ -137,6 +138,19 @@ def compute_importance_ratio_and_mismatch_kl(
     return log_importance_ratio, importance_ratio, mismatch_kl
 
 
+def apply_score_centering(per_token_loss: Tensor, inputs: LossInputs, adv_tau: float) -> Tensor:
+    correction = inputs.score_correction
+    if correction is None:
+        if bool(inputs.loss_mask.any()):
+            raise ValueError("score_centering requires a sampler-score correction on active RL tokens")
+        return per_token_loss
+    # Retain the objective's value and its KL term, but center the PG gradient.
+    # Rejected sampled actions still receive the expected-score correction.
+    return per_token_loss + torch.where(
+        inputs.loss_mask, adv_tau * inputs.advantages.detach() * (correction - correction.detach()), 0.0
+    )
+
+
 class IPOLoss:
     """IPO loss type: a symmetric trust region (mask tokens whose probability
     moved more than ``eps`` in absolute terms), policy gradient via
@@ -165,6 +179,8 @@ class IPOLoss:
         pg_loss = keep_mask * advantages * importance_ratio
         kl_loss = loss_mask * log_importance_ratio**2
         per_token_loss = -pg_loss + loss_config.kl_tau * kl_loss
+        if loss_config.score_centering:
+            per_token_loss = apply_score_centering(per_token_loss, inputs, loss_config.adv_tau)
         if inputs.loss_weights is not None:
             per_token_loss = per_token_loss * inputs.loss_weights
         loss = per_token_loss.sum()
@@ -202,6 +218,8 @@ class IcePopLoss:
         safe_log_ratio = torch.where(keep_mask, log_importance_ratio, torch.zeros_like(log_importance_ratio))
         importance_ratio = torch.exp(safe_log_ratio)
         per_token_loss = -(keep_mask * loss_config.adv_tau * inputs.advantages * importance_ratio)
+        if loss_config.score_centering:
+            per_token_loss = apply_score_centering(per_token_loss, inputs, loss_config.adv_tau)
         if inputs.loss_weights is not None:
             per_token_loss = per_token_loss * inputs.loss_weights
 
@@ -317,6 +335,7 @@ def compute_loss(
     ref_kl_scale: int,
     rl_group_denominators: list[int] | None = None,
     cp_size: int = 1,
+    score_corrections: list[Tensor] | None = None,
 ) -> tuple[Float[Tensor, ""], dict[str, Any]]:
     """
     Compute loss for packed sequences (batch size = 1, multiple sequences packed along sequence dimension).
@@ -357,6 +376,7 @@ def compute_loss(
     all_metrics: dict[str, list[Tensor]] = {}
 
     n = len(trainer_logprobs)
+    score_corrections = score_corrections if score_corrections is not None else [None] * n
     if rl_group_denominators is not None:
         if len(rl_group_denominators) != n or any(d <= 0 for d in rl_group_denominators):
             raise ValueError("Expected one positive RL group denominator per sequence")
@@ -387,7 +407,7 @@ def compute_loss(
     rl_loss = trainer_logprobs[0].sum() * 0.0
     ce_loss = 0.0
     ref_kl_loss = 0.0
-    for t_logp, i_logp, ref_logp, adv, mask, rl_w, ce_w, ref_kl_w, rl_divisor in zip(
+    for t_logp, i_logp, ref_logp, adv, mask, rl_w, ce_w, ref_kl_w, rl_divisor, correction in zip(
         trainer_logprobs,
         inference_logprobs,
         ref_logprobs,
@@ -397,6 +417,7 @@ def compute_loss(
         ce_weights,
         ref_kl_weights,
         rl_divisors,
+        score_corrections,
         strict=True,
     ):
 
@@ -408,6 +429,7 @@ def compute_loss(
                 advantages=adv,
                 loss_mask=component_mask,
                 loss_weights=weights,
+                score_correction=correction,
             )
 
         if rl_w is None:

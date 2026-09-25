@@ -1,0 +1,15 @@
+# Apply after overrides.toml and your complete model/environment configuration.
+[trainer.loss]
+type = "ipo"
+aggregation = "group_token_mean"
+score_centering = true
+
+[trainer.model]
+fused_lm_head_token_chunk_size = "disabled"
+
+[orchestrator.train.sampling]
+score_centering_top_k = 128
+
+[inference.vllm]
+logprobs_mode = "processed_logprobs"
+max_logprobs = 128

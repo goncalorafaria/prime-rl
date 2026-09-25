@@ -16,7 +16,8 @@ from torch.profiler import profile, ProfilerActivity, record_function
 from prime_rl.trainer.ckpt import Progress, setup_ckpt_manager
 from prime_rl.trainer.optim import setup_optimizer
 from prime_rl.trainer.scheduler import setup_scheduler
-from prime_rl.configs.trainer import TrainerConfig
+from prime_rl.configs.trainer import TrainerConfig, uses_score_centering
+from prime_rl.trainer.rl.score_centering import masked_score_correction
 from prime_rl.trainer.rl.data import DataLoader, FakeDataLoader
 from prime_rl.utils.cp import (
     gather_for_cp,
@@ -382,6 +383,15 @@ def train(config: TrainerConfig):
 
             seq_lens = micro_batch["seq_lens"].to("cuda")
 
+            head_ids = head_logprobs = None
+            active_rl = loss_mask if rl_weights is None else loss_mask & (rl_weights != 0)
+            if uses_score_centering(config.loss) and bool(active_rl.any()):
+                if micro_batch.get("sampler_head_ids") is None:
+                    raise ValueError("score_centering requires recorded sampler probabilities")
+                head_ids = shift_tensor_left(micro_batch["sampler_head_ids"].to("cuda"), pad_value=-1)
+                head_logprobs = shift_tensor_left(micro_batch["sampler_head_logprobs"].to("cuda"))
+                active_rl = shift_tensor_left(active_rl)
+
             labels = shift_tensor_left(input_ids)
             if sampling_mask is not None:
                 # Sampling masks ride at the sampled token's own position (like inference
@@ -405,6 +415,10 @@ def train(config: TrainerConfig):
                     )
                 seq_lens_are_pre_shard = True
                 labels = shard_for_cp(labels, cp_rank=cp_rank, cp_world_size=cp_size)
+                if head_ids is not None:
+                    head_ids = shard_for_cp(head_ids, cp_rank=cp_rank, cp_world_size=cp_size)
+                    head_logprobs = shard_for_cp(head_logprobs, cp_rank=cp_rank, cp_world_size=cp_size)
+                    active_rl = shard_for_cp(active_rl, cp_rank=cp_rank, cp_world_size=cp_size)
                 if routed_experts is not None and not defer_vlm_cp_to_model:
                     routed_experts = shard_for_cp(routed_experts, cp_rank=cp_rank, cp_world_size=cp_size)
                 if sampling_mask is not None:
@@ -458,15 +472,29 @@ def train(config: TrainerConfig):
                 logits = out["logits"]
                 # Per-token temperature scaling: temperatures is [batch, seq], logits is [batch, seq, vocab]
                 scaled_logits = logits / temperatures.unsqueeze(-1)
+                if uses_score_centering(config.loss):
+                    scaled_logits = scaled_logits.float()
                 if sampling_mask is not None:
                     out["logprobs"] = selective_log_softmax_with_sampling_mask(scaled_logits, labels, sampling_mask)
                 else:
                     out["logprobs"] = selective_log_softmax(scaled_logits, labels)
                 out["entropy"] = compute_entropy(scaled_logits)
+                if head_ids is not None:
+                    out["score_correction"] = masked_score_correction(
+                        scaled_logits,
+                        head_ids,
+                        head_logprobs,
+                        labels,
+                        active_rl,
+                        config.loss,
+                        sampling_mask=sampling_mask,
+                    )
             # else: FusedOutputLinear was used - logprobs already computed with per-token temperatures
 
             if cp_enabled:
                 out["logprobs"] = gather_for_cp(out["logprobs"], cp_group)
+                if "score_correction" in out:
+                    out["score_correction"] = gather_for_cp(out["score_correction"], cp_group)
                 out["entropy"] = gather_for_cp_wo_grad(out["entropy"], cp_size, cp_group)
 
             vocab_size = getattr(model.config, "vocab_size", None) or model.config.text_config.vocab_size
@@ -477,6 +505,8 @@ def train(config: TrainerConfig):
             out["entropy"] = shift_tensor_right(
                 out["entropy"], pad_value=torch.log(torch.tensor(float(vocab_size))).item()
             )
+
+            score_correction = shift_tensor_right(out["score_correction"]) if "score_correction" in out else None
 
             # Compute loss
             sequence_lengths = micro_batch["sequence_lengths"]
@@ -495,6 +525,9 @@ def train(config: TrainerConfig):
                 ref_kl_scale=ref_kl_scale,
                 rl_group_denominators=micro_batch["rl_group_denominators"] if group_mean else None,
                 cp_size=cp_size,
+                score_corrections=score_correction.squeeze(0).split(sequence_lengths)
+                if score_correction is not None
+                else None,
             )
 
             # Backward pass
