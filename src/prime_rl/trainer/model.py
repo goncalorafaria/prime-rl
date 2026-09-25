@@ -622,6 +622,20 @@ def setup_fsdp(model: nn.Module, config: ModelConfig, parallel_dims: ParallelDim
                 transformer_block.set_modules_to_backward_prefetch([embed_module])
 
 
+def restore_tied_embeddings(model: nn.Module) -> None:
+    """Re-share lm_head with the input embedding after to_empty() breaks the tie.
+
+    Tied checkpoints ship no lm_head tensor and the DCP load skips it, so without this
+    PrimeRL models keep an unloaded lm_head (all zeros) and sample uniform noise.
+    """
+    if not model.config.tie_word_embeddings:
+        return
+    if isinstance(model, PreTrainedModelPrimeRL):
+        model.lm_head.weight = model.get_input_embeddings().weight
+    else:
+        model.tie_weights()
+
+
 def load_dcp_from_hf(model: nn.Module, config: ModelConfig, parallel_dims: ParallelDims):
     device = "cpu" if config.fsdp_cpu_offload else "cuda"
     model.to_empty(device=device)
@@ -711,9 +725,7 @@ def load_dcp_from_hf(model: nn.Module, config: ModelConfig, parallel_dims: Paral
         storage_reader=HuggingFaceStorageReader(path=snapshot_path.as_posix()),
     )
     write_back_loaded_packed_parameters(model, state_dict)
-    # Restore weight tying broken by to_empty() for HF models
-    if not isinstance(model, PreTrainedModelPrimeRL) and model.config.tie_word_embeddings:
-        model.tie_weights()
+    restore_tied_embeddings(model)
 
     _move_buffers_to_cuda(model, config)
 
@@ -1031,9 +1043,7 @@ def setup_model(
                 model.init_buffers_post_meta()
             else:
                 fix_model_post_empty(model)
-                # Restore weight tying broken by to_empty() for HF models
-                if model.config.tie_word_embeddings:
-                    model.tie_weights()
+            restore_tied_embeddings(model)
 
             _move_buffers_to_cuda(model, config)
         # - or load from HF with dcp
