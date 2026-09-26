@@ -1,6 +1,9 @@
-# Apply after overrides.toml and your complete model/environment configuration.
+# Replace trainer.loss in your complete config with this table; merge other tables.
+# Remove IPO-only eps/kl_tau fields when switching from overrides.toml.
 [trainer.loss]
-type = "ipo"
+type = "icepop"
+ratio_low = 0.2 # Upstream defaults; used for both sampled and centering masks.
+ratio_high = 5.0
 aggregation = "group_token_mean"
 score_centering = true
 

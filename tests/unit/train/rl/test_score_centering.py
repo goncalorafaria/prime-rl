@@ -199,3 +199,59 @@ def test_score_correction_next_token_alignment_across_cp_shards():
         torch.autograd.grad(full.sum(), logits, retain_graph=True)[0], torch.autograd.grad(gathered.sum(), logits)[0]
     )
     assert not full[~active].any()
+
+
+@pytest.mark.parametrize("q_head", [0.1, 0.5, 0.9])
+@pytest.mark.parametrize("truncated", [False, True])
+def test_icepop_jasper_gradient_parity(q_head, truncated):
+    """Compare the actual loss against the supplied head-only MIS surrogate."""
+    config = IcePopLossConfig(ratio_low=0.5, ratio_high=1.5, score_centering=True)
+    z = torch.tensor([[0.3, -0.2, 0.7, 0.1]], requires_grad=True)
+    ids = torch.tensor([[0, -1]])
+    logq = torch.tensor([[q_head, 1.0]]).log()
+    support = torch.tensor([[0, 1, 2]]) if truncated else None
+    lp = (z.masked_fill(torch.tensor([[False, False, False, truncated]]), -torch.inf)).log_softmax(-1)
+    correction = masked_score_correction(z, ids, logq, torch.tensor([0]), torch.tensor([True]), config, support)
+    inputs = LossInputs(
+        lp[:, 0], logq[:, 0], None, torch.tensor([2.0]), torch.tensor([True]), score_correction=correction
+    )
+    actual = setup_rl_loss_fn(config).loss(inputs).loss
+    weight = lambda r: torch.where((r >= 0.5) & (r <= 1.5), r, 0.0)
+    head = lp[:, :1]
+    qh = logq[:, :1]
+    train_tail = (1 - head.exp().sum(-1)).clamp_min(1e-6)
+    sampler_tail = (1 - qh.exp().sum(-1)).clamp_min(1e-6)
+    c = sampler_tail / train_tail
+    alpha = c * weight(1 / c)
+    residual = qh.exp() * weight((head - qh).exp()) - alpha[:, None] * head.exp()
+    jasper = -2 * (weight((head - qh).exp()).detach() * head - residual.detach() * head).sum()
+    torch.testing.assert_close(torch.autograd.grad(actual, z, retain_graph=True)[0], torch.autograd.grad(jasper, z)[0])
+    assert torch.isfinite(actual)
+
+
+def test_icepop_head_boundaries_and_zero_tail():
+    from prime_rl.trainer.rl.score_centering import icepop_head_correction
+
+    config = IcePopLossConfig(ratio_low=0.5, ratio_high=2.0)
+    lp = torch.tensor([[0.25, 0.75], [0.5, 0.5]]).log().requires_grad_()
+    lq = torch.tensor([[0.5, 0.375], [0.5, 0.5]]).log()
+    value = icepop_head_correction(lp, lq, torch.ones_like(lp, dtype=torch.bool), config)
+    grad = torch.autograd.grad(value.sum(), lp)[0]
+    # Both head ratios lie on inclusive bounds; rejected tail gives alpha=0.
+    torch.testing.assert_close(grad[0], torch.tensor([0.25, 0.75]))
+    # Complete equal distributions have zero residual, including zero tail masses.
+    torch.testing.assert_close(grad[1], torch.zeros(2))
+    assert torch.isfinite(value).all()
+
+
+@pytest.mark.parametrize(
+    "support", [torch.empty((1, 0), dtype=torch.long), torch.tensor([[-1, -1]]), torch.tensor([[1, 2]])]
+)
+def test_icepop_replay_fallback_matches_full_vocab(support):
+    z = torch.tensor([[0.1, 0.4, -0.2]], requires_grad=True)
+    args = (torch.tensor([[0]]), torch.tensor([[0.3]]).log(), torch.tensor([0]), torch.tensor([True]))
+    config = IcePopLossConfig(ratio_low=0.5, ratio_high=1.5)
+    actual = masked_score_correction(z, *args, config, sampling_mask=support)
+    expected = masked_score_correction(z, *args, config)
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(torch.autograd.grad(actual.sum(), z)[0], torch.autograd.grad(expected.sum(), z)[0])

@@ -87,7 +87,10 @@ and prefix-preserving next-turn bridges. No live vLLM/GPU validation was perform
 
 `trainer.loss.score_centering = true` enables the correction; the default is false.
 See `docs/score-centering.md` for the formula and assumptions. Apply
-`integration/grouped-rubrics/score-centering.toml` after the baseline overrides.
+`integration/grouped-rubrics/score-centering.toml` by replacing the baseline
+loss table (remove IPO-only eps/kl_tau) and merging its other tables. The fragment
+selects IcePop with upstream ratio bounds. IcePop uses Jasper's detached head
+residual and scalar tail masses; IPO retains the explicit vocabulary correction.
 This requires an unfused output layer and recorded processed sampler probabilities.
 Both native fusion support and the upstream Qwen3.5 parser convention are retained.
 The trainer corrects each token before the selected group/token reduction.

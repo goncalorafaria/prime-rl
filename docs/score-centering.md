@@ -4,7 +4,9 @@ IPO and IcePop support an optional score-centering correction:
 
 ```toml
 [trainer.loss]
-type = "ipo" # or "icepop"
+type = "icepop"
+ratio_low = 0.2
+ratio_high = 5.0
 aggregation = "group_token_mean" # token_mean is also supported
 score_centering = true
 
@@ -18,6 +20,9 @@ score_centering_top_k = 128
 logprobs_mode = "processed_logprobs"
 max_logprobs = 128
 ```
+
+Replace the entire loss table when switching loss types: IPO-only `eps` and
+`kl_tau` do not belong in an IcePop config.
 
 The flag defaults to false. It leaves the selected upstream loss's forward value,
 trust-region rule, component weights, group/token normalization, and IPO KL term
@@ -41,6 +46,20 @@ sampler tail is approximated proportional to detached trainer probabilities.
 This is an approximation unless the recorded head covers the sampler's support.
 `score_centering_top_k` controls recording, not sampling truncation.
 
+IcePop uses Jasper's head-only residual. For recorded head H, let
+`c = max(1-sum_H q, 1e-6) / max(1-sum_H p, 1e-6)` and
+`w(r) = r * 1[ratio_low <= r <= ratio_high]`. Then
+`alpha = c*w(1/c)` is the tail acceptance indicator, and the correction is
+`sum_H stop_gradient(p*keep - alpha*p) * log(p)`.
+Only head probabilities and scalar tail masses are constructed. Coefficients
+are not normalized by their sum. The 1e-6 tail-mass safeguard follows Jasper's
+formula; near zero tail mass this is a numerically regularized approximation.
+The sampled-token loss and the correction use the same configured ratio bounds.
+
+IPO remains available with its explicit vocabulary-wide correction because its
+absolute-probability acceptance mask can vary across the proportional tail.
+It does not have IcePop's head-only memory advantage. TIS is not implemented.
+
 Native top-p/top-k sampling replay remains enabled through upstream's config.
 Both the trainer distribution and the reconstructed tail use the replayed support.
 The correction uses the same next-token alignment and CP shard as the trainer
@@ -50,7 +69,12 @@ This implementation requires positive rollout temperature, processed logprobs,
 and an unfused output layer. Missing heads on active RL tokens or heads outside
 replayed support are errors. With separately launched inference, configure its
 logprobs mode and maximum explicitly. Full-vocabulary logits increase memory
-usage; chunk checkpointing avoids retaining an additional full correction graph.
+usage. IcePop gathers head logits and computes their log-normalizer without
+constructing full-vocabulary probabilities, tail tensors, or acceptance masks.
+Normalization still scans logits (or replay support); the entire operation is not
+O(k). Checkpointing recomputes chunk normalization and avoids retaining copied
+logit chunks. The unfused trainer output still materializes full logits; fused
+head-logprob extraction is not implemented.
 GPU memory and throughput need validation for the chosen model and context length.
 
 With `score_centering = false`, heads are unnecessary and the fused output layer
