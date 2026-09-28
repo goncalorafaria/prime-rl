@@ -38,7 +38,7 @@ prime-rl is a framework for large-scale reinforcement learning. It is designed t
 5. Multi-node deployment with Slurm and Kubernetes support.
 6. Multimodal support for VLMs such as Qwen3-VL.
 7. Hackable, modular, and extensible by design.
-8. One-line SLURM deployment for frontier models — e.g. [`GLM-5` FP8 with P/D disaggregation, the `llm-d` router, and Mooncake KV offload](examples/advanced/glm-5.2/).
+8. One-line SLURM deployment for frontier models — e.g. [`GLM-5` FP8 with P/D disaggregation, the `llm-d` router, and Mooncake KV offload](examples/advanced/glm-5.3/).
 
 
 ## Models support
@@ -59,7 +59,7 @@ With `[model] impl = "auto"` (the default), the trainer selects that custom stac
 | Nemotron H (`nemotron_h`) | `nvidia/Nemotron-3-Nano-30B-A3B`, `nvidia/Nemotron-3-Super-120B-A12B`, … | yes | ✅ | ✅ |
 | Trinity (`afmoe`) | `arcee-ai/Trinity-Mini`, … | yes | ✅ | ✅ |
 | GLM-4 · GLM-4.5 MoE · INTELLECT-3 (`glm4_moe`) | `THUDM/GLM-4-9B-0414`, `zai-org/GLM-4.5-Air`, `zai-org/GLM-4.5`, `PrimeIntellect/INTELLECT-3`, … | yes | ✅ | ✅ |
-| GPT-OSS (HF, MoE) | `openai/gpt-oss-20b`, `openai/gpt-oss-120b` | yes |  ✅ | ✅ |
+| GPT-OSS (`gpt_oss`) | `unsloth/gpt-oss-20b-BF16`, … | yes | ✅ | ✅ |
 | Other HF causal LMs | Qwen3 dense, Mistral, … (`impl = "hf"`) | varies | ❌ | ✅ |
 
 
@@ -204,10 +204,7 @@ These guides are designed to be run from a Slurm cluster but can also be adapted
 
 1. [**Qwen3-30B-A3B**](examples/advanced/qwen3-30b-a3b/): Train `Qwen3-30B-A3B` on math, SWE, and agentic tool use.
 2. [**GLM-4.5-Air**](examples/advanced/glm-4.5-air/): Train `GLM-4.5-Air` on search, SWE, and terminal tasks.
-3. [**Nemotron-3-Super**](examples/advanced/nemotron-3-super/): Train the `Nemotron-3-Super-120B` hybrid-Mamba MoE on SWE at 131k context.
-4. [**MiniMax-M2.5 SWE**](examples/advanced/minimax-m2.5/): Train `MiniMax-M2.5` on agentic SWE tasks.
-5. [**INTELLECT-3.1**](examples/advanced/intellect-3.1/): Reproduce our `INTELLECT-3.1` training run.
-6. [**High-throughput GLM-5**](examples/advanced/glm-5.2/): Large-scale `GLM-5`/`GLM-5.2` inference with P/D disaggregation, the `llm-d` router, and FP8.
+3. [**GLM-5**](examples/advanced/glm-5.3/): Large-scale `GLM-5`/`GLM-5.3` training with P/D disaggregation, the `llm-d` router, and FP8.
 
 ## Docs
 
@@ -215,7 +212,8 @@ Check out the [docs](docs) directory for in-depth guides on how to use prime-rl.
 
 - [**Overview**](docs/overview.md) - Architecture, install, and a copy-pasteable end-to-end RL run
 - [**Configuration**](docs/configuration.md) - TOML composition, CLI overrides, env vars, validation
-- [**Training**](docs/training.md) - RL, SFT, evals, checkpointing, observability, rules of thumb
+- [**Training**](docs/training.md) - RL, SFT, checkpointing, observability, rules of thumb
+- [**Eval**](docs/eval.md) - Standalone evals against any inference server, online evals, resume, platform upload
 - [**Scaling**](docs/scaling.md) - Single-GPU through multi-node, FSDP/EP/CP, SLURM, benchmarking
 - [**Algorithms**](docs/algorithms.md) - Async/off-policy training, the AIPO loss, advantage and filter plugins, trajectory merging
 - [**Advanced**](docs/advanced.md) - Custom modeling, multimodal training, LoRA

@@ -34,6 +34,7 @@ class TensorMicroBatch(TypedDict):
     # synthetic data. "" / -1 mark an unknown sequence (e.g. a dummy batch).
     trace_ids: list[str] | None
     branch_indices: list[int] | None
+    rl_group_denominators: list[int] | None
 
     # Batch level
     lora_num_tokens: Int[Tensor, "n_loras"]
@@ -130,6 +131,7 @@ class FakeDataLoader:
             "sequence_lengths": sequence_lengths,
             "trace_ids": None,
             "branch_indices": None,
+            "rl_group_denominators": None,
             "loss_mask": loss_mask.unsqueeze(0),
             "lora_num_tokens": torch.tensor([input_ids.shape[0]], dtype=torch.int32),
             "seq_lens": torch.tensor(sequence_lengths, dtype=torch.long),
@@ -162,6 +164,7 @@ class FakeDataLoader:
             "sequence_lengths": [self.seq_len],
             "trace_ids": None,
             "branch_indices": None,
+            "rl_group_denominators": None,
             "loss_mask": torch.ones(self.seq_len, dtype=torch.bool).unsqueeze(0),
             "lora_num_tokens": torch.tensor([self.seq_len], dtype=torch.int32),
             "seq_lens": torch.tensor([self.seq_len], dtype=torch.long),
@@ -246,6 +249,7 @@ class DataLoader:
             sequence_lengths=micro_batch.sequence_lengths,
             trace_ids=micro_batch.trace_ids,
             branch_indices=micro_batch.branch_indices,
+            rl_group_denominators=micro_batch.rl_group_denominators,
             # Single adapter: every token in the batch belongs to it (padding included).
             lora_num_tokens=torch.tensor([len(micro_batch.input_ids)], dtype=torch.int32),
             seq_lens=torch.tensor(micro_batch.seq_lens, dtype=torch.long),

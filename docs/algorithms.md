@@ -112,7 +112,7 @@ patterns = ["WARNING"]
 def drop_warnings(rollout, *, patterns: list[str]) -> list[list[bool]]: ...
 ```
 
-Component compatibility is validated at config time: frozen-model sampling can only feed the `ce` loss component — the `rl` and `ref_kl` components need the live policy's own sampling logprobs for importance ratios — `opd` pointed at `"policy"` is rejected as degenerate (zero KL), `sft` without a frozen source is rejected (CE on the policy's own tokens is not a distillation target). A group-relative algorithm with `group_size = 1` produces all-zero advantages; the resulting empty batch is caught at runtime (the orchestrator warns and aborts after repeated zero-trainable batches), not at config time.
+Component compatibility is validated at config time: frozen-model sampling can only feed the `ce` loss component — the `rl` and `ref_kl` components need the live policy's own sampling logprobs for importance ratios — `opd` pointed at `"policy"` is rejected as degenerate (zero KL), `sft` without a frozen source is rejected (CE on the policy's own tokens is not a distillation target). A group-relative algorithm with `group_size = 1` produces all-zero advantages; the resulting empty batch is caught at runtime (the orchestrator warns and skips it), not at config time.
 
 ### Per-Env Algorithms
 
@@ -184,11 +184,26 @@ $$
 \mathcal{L} = \frac{\sum \mathcal{L}_{rl}}{N_{rl}} + \frac{\sum \mathcal{L}_{ce}}{N_{ce}} + \frac{\sum \mathcal{L}_{ref\_kl}}{N_{ref\_kl}}
 $$
 
-- `rl` — the configured RL loss (`[trainer.loss]`): IPO by default, or a [custom loss](#custom-loss). Fed by the advantage-assigning algorithms (`grpo`, `max_rl`, `rae`, `hierarchical_grpo`, and `echo`'s action tokens).
+- `rl` — the configured RL loss (`[trainer.loss]`): IPO by default, or optionally [IcePop](#icepop-loss) or a [custom loss](#custom-loss). Fed by the advantage-assigning algorithms (`grpo`, `max_rl`, `rae`, `hierarchical_grpo`, and `echo`'s action tokens).
 - `ce` — masked NLL. Used for frozen-model tokens (`sft`) and env-observation tokens (`echo`).
 - `ref_kl` — the per-token reverse KL to a reference model ($\log \pi_{\text{ref}} - \log \pi$) as the policy-gradient signal, importance-ratio corrected with a one-sided trust region (`opd`, `opsd`). Requires `ref_logprobs` from a [reference scoring](#reference-scoring); the scoring model must be a vLLM server (it's the only one that exposes `prompt_logprobs`).
 
 The orchestrator stamps each sample's component membership as per-token weight streams (`rl_weights` / `ce_weights` / `ref_kl_weights` on the wire): a weight scales that component's per-token loss, `0.0` leaves the token out of the component entirely (mask *and* denominator), and components may overlap on the same token — their gradients sum. Each $N$ is the global (all-reduced) count of that component's member tokens, so the components don't dilute each other: adding echo observation tokens never changes the rl term's effective per-token learning rate, and an sft env packed next to a GRPO env doesn't soften its gradient. Tokens of different components pack freely into the same micro batch, and a plain GRPO run ships no weight streams at all (absent streams mean rl weight 1.0 on every trainable token — the unchanged hot path). Advantages always ship per token (`advantages` on the wire), assigned as per-token streams from the start — uniform group credit is broadcast over completion tokens at assignment; algorithms with no rl credit (opd, opsd) ship none.
+
+### RL reduction
+
+`trainer.loss.aggregation = "token_mean"` uses the global token means above.
+Set `aggregation = "group_token_mean"` to average the RL component within each
+rollout dispatch group, then equally average the nonempty groups in the training
+batch. The denominator counts eligible RL tokens after truncation and component
+routing, before loss-specific trust-region rejection. Nonzero component weights
+scale the numerator; zero weights exclude tokens. Partial groups use the members
+present in that batch. CE and reference-KL retain global token normalization.
+
+Group reduction applies to IPO, IcePop, and custom RL losses. Custom losses must
+return a token sum. The orchestrator supplies group denominators across all DP
+workers; CP replication is accounted for by the trainer. Group mode rejects
+batches without this metadata, including the synthetic fake-data loader.
 
 ### IPO Loss
 
@@ -209,11 +224,41 @@ The knobs under `[trainer.loss]` are:
 
 | Knob | Default | What it does |
 |---|---|---|
-| `eps` | 0.1 | Maximum absolute probability change before a token is masked. |
+| `eps` | 0.3 | Maximum absolute probability change before a token is masked. |
 | `adv_tau` | 1.0 | Temperature on the advantage term. Set to 0 to drop the policy-gradient term, leaving only the KL regularizer. |
-| `kl_tau` | 1e-3 | Temperature on the KL regularizer. Set to 0 to disable. |
+| `kl_tau` | 0.0 | Temperature on the KL regularizer. Set to 0 to disable. |
 
 Omit `[trainer.loss]` to use these defaults. Set `type = "ipo"` when you specify the section. The `ce` and `ref_kl` components are fixed and unaffected by `[trainer.loss]`.
+
+### IcePop Loss
+
+IcePop is an opt-in RL loss that drops tokens whose trainer-to-inference
+importance ratio falls outside a fixed acceptance band, introduced to stabilize
+MoE RL in [Every Step Evolves: Scaling Reinforcement Learning for Trillion-Scale
+Mixture-of-Experts Reasoning Models](https://arxiv.org/abs/2510.18855). Accepted
+tokens retain the importance-weighted policy-gradient term, and there is no
+separate KL penalty:
+
+$$
+\mathcal{L}(\theta) = -\frac{1}{N}\sum_t
+\mathbb{1}\!\left(\alpha \le \frac{\pi(y_t)}{\mu(y_t)} \le \beta\right)
+\tau_A \hat{A}_t \frac{\pi(y_t)}{\mu(y_t)}.
+$$
+
+Enable it explicitly:
+
+```toml
+[trainer.loss]
+type = "icepop"
+ratio_low = 0.2
+ratio_high = 5.0
+```
+
+| Knob | Default | What it does |
+|---|---|---|
+| `ratio_low` | 0.2 | Lower accepted trainer-to-inference probability ratio. |
+| `ratio_high` | 5.0 | Upper accepted trainer-to-inference probability ratio. |
+| `adv_tau` | 1.0 | Temperature on the advantage term. |
 
 ### Custom Loss
 

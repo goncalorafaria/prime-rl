@@ -4,6 +4,7 @@ import asyncio
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import httpx
 import verifiers.v1 as vf
@@ -13,8 +14,36 @@ from renderers import RendererConfig
 from tenacity import AsyncRetrying, retry, retry_if_exception, stop_after_attempt, stop_after_delay, wait_exponential
 from verifiers.v1.configs.client import EvalClientConfig, TrainClientConfig
 
+from prime_rl.configs.eval import PRIME_INFERENCE_URL
 from prime_rl.configs.shared import ClientConfig
 from prime_rl.utils.logger import get_logger
+
+
+def resolve_api_key(api_key_var: str) -> str:
+    """The API key named by ``api_key_var``; ``PRIME_API_KEY`` also falls back to the prime
+    CLI config (``prime login``), like the verifiers client does. ``"EMPTY"`` when unset."""
+    api_key = os.environ.get(api_key_var)
+    if not api_key and api_key_var == "PRIME_API_KEY":
+        from prime_sandboxes import Config as PrimeConfig
+
+        api_key = PrimeConfig().api_key
+    return api_key or "EMPTY"
+
+
+def resolve_headers(client_config: ClientConfig) -> dict[str, str]:
+    """The static headers plus those read from the environment. A Prime Inference client
+    without a team header gets the team from ``$PRIME_TEAM_ID`` or the prime CLI config,
+    like the verifiers client: a team's internal models are served only under it."""
+    env_headers = {
+        k: v for k, v in ((k, os.getenv(v)) for k, v in client_config.headers_from_env.items()) if v is not None
+    }
+    headers = {**client_config.headers, **env_headers}
+    if client_config.base_url.startswith(PRIME_INFERENCE_URL) and "X-Prime-Team-ID" not in headers:
+        from prime_sandboxes import Config as PrimeConfig
+
+        if team_id := os.environ.get("PRIME_TEAM_ID") or PrimeConfig().team_id:
+            headers["X-Prime-Team-ID"] = team_id
+    return headers
 
 
 class PrefillScorer:
@@ -31,7 +60,7 @@ class PrefillScorer:
             # for these chat-completions teacher configs.
             self._client = AsyncOpenAI(
                 base_url=config.base_url,
-                api_key=os.environ.get(config.api_key_var) or "EMPTY",
+                api_key=resolve_api_key(config.api_key_var),
                 default_headers=config.headers or None,
             )
         return await prefill_logprobs(self._client, model, token_ids)
@@ -62,6 +91,13 @@ class InferenceClient:
         )
         self.eval_client = setup_client(client_config, client_type=eval_client_type)
         self._scorer = PrefillScorer()
+        # Managed routed deployments set admin_base_url so engine admin traffic
+        # bypasses the client-facing router. External and frozen clients do not.
+        self._session_client = (
+            setup_admin_clients(client_config.model_copy(update={"admin_base_url": None}))[0]
+            if client_config.admin_base_url is not None
+            else None
+        )
         self.model_name = model_name
 
     async def score(self, token_ids: list[int]) -> list[float]:
@@ -71,18 +107,37 @@ class InferenceClient:
 
     async def aclose(self) -> None:
         await self._scorer.aclose()
+        if self._session_client is not None:
+            await self._session_client.aclose()
+
+    async def finish_sessions(self, session_ids: list[str]) -> None:
+        """Release completed sessions when the client-facing router supports it."""
+        if self._session_client is None or not session_ids:
+            return
+
+        async def finish_session(session_id: str) -> None:
+            try:
+                await _admin_post(
+                    self._session_client,
+                    "/finish_session",
+                    timeout_s=5.0,
+                    params={"session_id": session_id},
+                )
+            except Exception as error:
+                get_logger().debug(f"Failed to release inference session {session_id}: {error!r}")
+
+        await asyncio.gather(*(finish_session(session_id) for session_id in session_ids))
 
 
-class AdminClients:
+class AdminPlane:
     """Admin plane of the policy inference deployment: one httpx client per
     engine process. The router serves no admin routes (pause/resume,
     update_weights, init_broadcaster, load_lora_adapter live on the engines),
     so these clients bypass it via ``admin_base_url``.
 
     The client order is load-bearing: ``admin_base_url`` order must match the
-    GPU rank order — the ``rank_offset`` math in ``init_nccl_broadcast`` /
-    ``init_nixl_broadcast`` and the metrics collector's role list index into
-    it."""
+    GPU rank order used by NCCL/NIXL initialization and the metrics collector's
+    role list index."""
 
     def __init__(self, client_config: ClientConfig):
         self.clients = setup_admin_clients(client_config)
@@ -107,16 +162,94 @@ class AdminClients:
         )
         await maybe_check_has_model(self.clients, model_name, skip_model_check=self._skip_model_check)
 
+    async def initialize_nccl(
+        self,
+        *,
+        host: str,
+        port: int,
+        timeout: int,
+        inference_world_size: int,
+    ) -> None:
+        gpus_per_server = inference_world_size // len(self.clients)
+        get_logger().info(
+            f"Initializing NCCL broadcast: {len(self.clients)} servers, "
+            f"inference_world_size={inference_world_size}, gpus_per_server={gpus_per_server}"
+        )
+
+        async def initialize_client(admin_client: AsyncClient, rank_offset: int) -> None:
+            try:
+                response = await admin_client.post(
+                    "/init_broadcaster",
+                    json={
+                        "host": host,
+                        "port": port,
+                        "rank_offset": rank_offset,
+                        "inference_world_size": inference_world_size,
+                        "timeout": timeout,
+                    },
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code == 404:
+                    get_logger().warning(
+                        "The route /init_broadcaster does not exist. Skipping NCCL broadcast initialization."
+                    )
+
+        await asyncio.gather(
+            *(
+                initialize_client(admin_client, client_num * gpus_per_server)
+                for client_num, admin_client in enumerate(self.clients)
+            )
+        )
+
+    async def update_weights(
+        self,
+        weight_dir: Path | None,
+        *,
+        transport: Literal["filesystem", "nccl", "nixl"],
+        step: int = 0,
+        on_paused: Callable[[], None] | None = None,
+    ) -> None:
+        """Update every inference engine through its configured weight transport."""
+        weight_dir_posix = weight_dir.as_posix() if weight_dir is not None else None
+
+        await _pause_engines(self.clients, step=step)
+        try:
+            if on_paused is not None:
+                on_paused()
+            await asyncio.gather(
+                *[
+                    _admin_post(
+                        admin_client,
+                        "/update_weights",
+                        json={"weight_dir": weight_dir_posix},
+                        timeout_s=UPDATE_WEIGHTS_TIMEOUT_S,
+                    )
+                    for admin_client in self.clients
+                ]
+            )
+        finally:
+            await _resume_engines(self.clients)
+
     async def aclose(self) -> None:
         for client in self.clients + self._router_clients:
             await client.aclose()
+
+
+def setup_admin_plane(client_config: ClientConfig, model_name: str) -> AdminPlane:
+    dynamo = client_config.dynamo
+    if dynamo is not None and dynamo.enabled:
+        from prime_rl.inference.dynamo import DynamoAdminPlane
+
+        return DynamoAdminPlane(client_config, model_name)
+    return AdminPlane(client_config)
 
 
 async def check_inference_ready(client_config: ClientConfig, model_name: str) -> None:
     """One-shot readiness check of an inference endpoint (health + model
     listing) with transient clients — for frozen endpoints that never need a
     persistent admin plane."""
-    admin = AdminClients(client_config)
+    admin = AdminPlane(client_config)
     try:
         await admin.wait_for_ready(model_name)
     finally:
@@ -141,10 +274,7 @@ def setup_client(
             "renderer": renderer_config,
             "renderer_model_name": renderer_model_name,
         }
-    env_headers = {
-        k: v for k, v in ((k, os.getenv(v)) for k, v in client_config.headers_from_env.items()) if v is not None
-    }
-    headers = {**client_config.headers, **env_headers}
+    headers = resolve_headers(client_config)
     return config_cls(
         base_url=client_config.base_url, api_key_var=client_config.api_key_var, headers=headers, **renderer_extra
     )
@@ -160,12 +290,9 @@ def setup_admin_clients(client_config: ClientConfig) -> list[AsyncClient]:
     urls = client_config.admin_base_url if client_config.admin_base_url else [client_config.base_url]
 
     def _setup_admin_client(base_url: str) -> httpx.AsyncClient:
-        env_headers = {
-            k: v for k, v in ((k, os.getenv(v)) for k, v in client_config.headers_from_env.items()) if v is not None
-        }
-        headers = {**client_config.headers, **env_headers}
-        api_key = os.getenv(client_config.api_key_var, "EMPTY")
-        if api_key and api_key != "EMPTY":
+        headers = resolve_headers(client_config)
+        api_key = resolve_api_key(client_config.api_key_var)
+        if api_key != "EMPTY":
             headers["Authorization"] = f"Bearer {api_key}"
 
         # Strip /v1 suffix since admin endpoints are at root level
@@ -190,7 +317,13 @@ async def maybe_check_has_model(
     logger.debug(f"Checking if model {model_name} is in the inference pool")
     results = await asyncio.gather(*[admin_client.get("/v1/models") for admin_client in admin_clients])
     for admin_client, result in zip(admin_clients, results):
-        models = result.json()["data"]
+        body = result.json() if result.headers.get("content-type", "").startswith("application/json") else {}
+        if result.status_code != 200 or "data" not in body:
+            raise RuntimeError(
+                f"Listing the models of {admin_client.base_url} failed with status {result.status_code}: "
+                f"{result.text[:300]}"
+            )
+        models = body["data"]
         if not any(model["id"] == model_name for model in models):
             raise ValueError(f"Model {model_name} was not found in the inference pool on {admin_client.base_url}")
     logger.debug(f"Model {model_name} was found in the inference pool")
@@ -200,7 +333,7 @@ async def check_health(
     admin_clients: list[AsyncClient],
     interval: int = 1,
     log_interval: int = 30,
-    timeout: int = 1800,
+    timeout: int = 3600,
     quiet: bool = False,
 ) -> None:
     """Wait until every client's /health responds. With ``quiet``, the periodic
@@ -300,44 +433,6 @@ async def _resume_engines(admin_clients: list[AsyncClient]) -> None:
     logger.debug("All inference engines resumed")
 
 
-async def update_weights(
-    admin_clients: list[AsyncClient],
-    weight_dir: Path | None,
-    step: int = 0,
-    on_paused: Callable[[], None] | None = None,
-) -> None:
-    """Update weights on static inference servers.
-
-    Pauses all engines first to drain in-flight requests, then performs the
-    weight update, then resumes. This ensures all DP workers are idle and can
-    participate in the collective weight transfer. ``on_paused`` runs between
-    the pause and the update RPC — the NCCL receiver signals the trainer there.
-
-    Note: the prefix cache is intentionally not reset on weight update. The orchestrator
-    salts the prefix cache per weight version (``cache_salt`` in the sampling request, see
-    ``orchestrator/envs.py``), so KV computed under old weights is never reused.
-    """
-    weight_dir_posix = weight_dir.as_posix() if weight_dir is not None else None
-
-    await _pause_engines(admin_clients, step=step)
-    try:
-        if on_paused is not None:
-            on_paused()
-        await asyncio.gather(
-            *[
-                _admin_post(
-                    admin_client,
-                    "/update_weights",
-                    json={"weight_dir": weight_dir_posix},
-                    timeout_s=UPDATE_WEIGHTS_TIMEOUT_S,
-                )
-                for admin_client in admin_clients
-            ]
-        )
-    finally:
-        await _resume_engines(admin_clients)
-
-
 def _is_retryable_lora_error(exception: BaseException) -> bool:
     """Check if an exception should trigger a retry for LoRA loading."""
     if isinstance(exception, httpx.HTTPStatusError):
@@ -362,7 +457,7 @@ LORA_LOAD_READ_TIMEOUT_S = 30.0
 LORA_LOAD_TOTAL_TIMEOUT_S = 120.0
 
 
-async def load_lora_adapter(admin_clients: list[AsyncClient], lora_name: str, lora_path: Path) -> None:
+async def load_lora_adapter(admin_plane: AdminPlane, lora_name: str, lora_path: Path) -> None:
     """Make a HTTP post request to the vLLM server to load a LoRA adapter.
 
     Uses our wrapper around vLLM's /v1/load_lora_adapter. The prefix cache is not reset
@@ -390,61 +485,11 @@ async def load_lora_adapter(admin_clients: list[AsyncClient], lora_name: str, lo
         )
         response.raise_for_status()
 
-    await asyncio.gather(*[_load_lora_adapter(admin_client) for admin_client in admin_clients])
-
-
-async def init_nccl_broadcast(
-    admin_clients: list[AsyncClient],
-    host: str,
-    port: int,
-    timeout: int,
-    inference_world_size: int,
-    quantize_in_weight_transfer: bool = False,
-) -> None:
-    """Initialize NCCL broadcast on all inference servers.
-
-    Each admin client represents one vLLM server. The function computes
-    per-server rank_offset and gpus_per_server so that every inference GPU
-    gets a unique rank in the NCCL broadcast group.
-    """
-    logger = get_logger()
-
-    gpus_per_server = inference_world_size // len(admin_clients)
-
-    logger.info(
-        f"Initializing NCCL broadcast: {len(admin_clients)} servers, "
-        f"inference_world_size={inference_world_size}, gpus_per_server={gpus_per_server}"
-    )
-
-    async def _init_nccl_broadcast(admin_client: AsyncClient, rank_offset: int) -> None:
-        try:
-            response = await admin_client.post(
-                "/init_broadcaster",
-                json={
-                    "host": host,
-                    "port": port,
-                    "rank_offset": rank_offset,
-                    "inference_world_size": inference_world_size,
-                    "timeout": timeout,
-                    "quantize_in_weight_transfer": quantize_in_weight_transfer,
-                },
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                logger.warning("The route /init_broadcaster does not exist. Skipping NCCL broadcast initialization.")
-                return
-
-    await asyncio.gather(
-        *[
-            _init_nccl_broadcast(admin_client, client_num * gpus_per_server)
-            for client_num, admin_client in enumerate(admin_clients)
-        ]
-    )
+    await asyncio.gather(*[_load_lora_adapter(client) for client in admin_plane.clients])
 
 
 async def init_nixl_broadcast(
-    admin_clients: list[AsyncClient],
+    admin_plane: AdminPlane,
     host: str,
     port: int,
     timeout: int,
@@ -452,6 +497,7 @@ async def init_nixl_broadcast(
     session_id: str,
 ) -> None:
     """Configure every vLLM worker for NIXL + ModelExpress pulls."""
+    admin_clients = admin_plane.clients
     workers_per_server = inference_world_size // len(admin_clients)
 
     async def initialize(admin_client: AsyncClient, rank_offset: int) -> None:
@@ -465,7 +511,6 @@ async def init_nixl_broadcast(
                 "rank_offset": rank_offset,
                 "inference_world_size": inference_world_size,
                 "timeout": timeout,
-                "quantize_in_weight_transfer": False,
                 "session_id": session_id,
             },
         )

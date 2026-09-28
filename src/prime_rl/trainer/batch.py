@@ -601,6 +601,7 @@ def _materialize_bin(bin_content: _MicroBatchBin) -> MicroBatch:
     sampling_mask: SamplingMask | None = SamplingMask(ids=b"", counts=b"") if has_sampling_mask else None
     trace_ids: list[str] = []
     branch_indices: list[int] = []
+    group_denominators = [] if all(s.rl_group_denominators is not None for s in bin_content.samples) else None
 
     for sample in bin_content.samples:
         sample_len = len(sample.input_ids)
@@ -644,6 +645,8 @@ def _materialize_bin(bin_content: _MicroBatchBin) -> MicroBatch:
             sampling_mask.counts += sample_mask.counts
         trace_ids.extend(sample.trace_ids or [""] * len(sample.sequence_lengths))
         branch_indices.extend(sample.branch_indices or [-1] * len(sample.sequence_lengths))
+        if group_denominators is not None:
+            group_denominators.extend(sample.rl_group_denominators)
 
     sequence_lengths = [len(sample.input_ids) for sample in bin_content.samples]
     assert sum(sequence_lengths) == len(input_ids), (sequence_lengths, len(input_ids))
@@ -669,6 +672,7 @@ def _materialize_bin(bin_content: _MicroBatchBin) -> MicroBatch:
         seq_lens=seq_lens,
         trace_ids=trace_ids,
         branch_indices=branch_indices,
+        rl_group_denominators=group_denominators,
     )
 
 
@@ -823,7 +827,7 @@ def _assert_token_arrays_aligned(micro_batch: MicroBatch) -> None:
         f"sequence_lengths sum {sum(micro_batch.sequence_lengths)} != {num_tokens} tokens"
     )
     num_sequences = len(micro_batch.sequence_lengths)
-    for name in ("trace_ids", "branch_indices"):
+    for name in ("trace_ids", "branch_indices", "rl_group_denominators"):
         values = getattr(micro_batch, name)
         assert values is None or len(values) == num_sequences, (
             f"{name} misaligned after packing: {len(values)} != {num_sequences} sequences"
@@ -859,6 +863,7 @@ def _make_dummy_batch(source: MicroBatch) -> MicroBatch:
     # The copied identity would double-annotate the source's traces.
     dummy.trace_ids = None
     dummy.branch_indices = None
+    dummy.rl_group_denominators = [1] * len(dummy.sequence_lengths)
     return dummy
 
 
@@ -869,6 +874,27 @@ def _pad_group_for_distribution(group: list[MicroBatch], num_train_workers: int)
         dummy = _make_dummy_batch(group[0])
         group.extend([dummy] * num_padding)
     return group
+
+
+def assign_group_denominators(rollouts: list[TrainingSample], samples: list[MicroBatch]) -> None:
+    """Count eligible RL tokens after truncation, across all branches and DP ranks.
+
+    Trust-region rejection does not change membership. Explicit zero RL weights
+    do; nonzero weights scale the numerator, not the denominator.
+    Missing group identities leave metadata absent so group reduction fails closed.
+    """
+    counts: dict[tuple[str, str], int] = {}
+    for rollout, sample in zip(rollouts, samples, strict=True):
+        weights = sample.rl_weights
+        count = sum(m and (weights is None or weights[i] != 0) for i, m in enumerate(sample.loss_mask))
+        if count and rollout.group_id is None:
+            return
+        if count:
+            key = (rollout.env_name, rollout.group_id)
+            counts[key] = counts.get(key, 0) + count
+    for rollout, sample in zip(rollouts, samples, strict=True):
+        denominator = max(len(counts) * counts.get((rollout.env_name, rollout.group_id), 0), 1)
+        sample.rl_group_denominators = [denominator]
 
 
 def prepare_batch(
@@ -888,6 +914,7 @@ def prepare_batch(
     and distribute them so that at each step index, all ranks see the same modality.
     """
     all_samples = [prepare_sample(rollout, seq_len) for rollout in rollouts]
+    assign_group_denominators(rollouts, all_samples)
 
     micro_batches = packed_samples_into_micro_bs(all_samples, seq_len, num_train_workers, bin_cost)
     micro_batches = [pad_micro_batch(micro_batch, pad_to_multiple_of) for micro_batch in micro_batches]

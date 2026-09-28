@@ -1,0 +1,26 @@
+# Merge these tables into a complete RL config; this fragment is not launchable alone.
+[trainer.optim]
+type = "adamw"
+lr = 2e-6
+weight_decay = 0.0
+betas1 = 0.95
+betas2 = 0.95
+eps = 1e-10
+
+[trainer.loss]
+type = "ipo"
+aggregation = "group_token_mean" # Set "token_mean" for upstream normalization.
+eps = 0.3 # IPO probability-change threshold, not AdamW epsilon.
+kl_tau = 0.0
+
+[orchestrator]
+batch_size = 128
+group_size = 16
+
+[orchestrator.concurrency]
+initial_inflight = 192
+max_inflight = 192 # Adaptive ceiling of 1.5 * batch_size; may decrease under load.
+
+[orchestrator.train.sampling]
+temperature = 1.0
+top_p = 0.97 # The rl entrypoint configures upstream native sampling replay.

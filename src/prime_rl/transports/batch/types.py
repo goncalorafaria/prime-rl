@@ -85,6 +85,7 @@ class TrainingSample(msgspec.Struct, array_like=True, gc=False, omit_defaults=Tr
     # samples (e.g. fake data).
     trace_id: str | None = None
     branch_index: int | None = None
+    group_id: str | None = None  # Dispatch group, shared by all of its rollout branches.
 
 
 # Orchestrator -> Trainer
@@ -123,3 +124,7 @@ class MicroBatch(msgspec.Struct, array_like=True, gc=False, omit_defaults=True):
     # (e.g. a dummy micro batch). ``None`` when no packed sample carried one.
     trace_ids: list[str] | None = None
     branch_indices: list[int] | None = None
+
+    # Per-sequence G * T_g: active group count times that group's RL token count,
+    # computed over the complete batch after truncation and before DP distribution.
+    rl_group_denominators: list[int] | None = None
