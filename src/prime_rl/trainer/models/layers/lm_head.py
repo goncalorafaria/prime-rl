@@ -32,7 +32,11 @@ def cast_float_and_contiguous(output: PrimeLmOutput) -> PrimeLmOutput:
         logprobs=_float_and_contiguous(output.get("logprobs")),
         entropy=_float_and_contiguous(output.get("entropy")),
         loss=output.get("loss"),
-        **({"score_correction": _float_and_contiguous(output["score_correction"])} if "score_correction" in output else {}),
+        **(
+            {"score_correction": _float_and_contiguous(output["score_correction"])}
+            if "score_correction" in output
+            else {}
+        ),
     )
 
 
@@ -84,9 +88,7 @@ class VanillaOutputLinear(torch.nn.Linear):
 
             if sampling_mask is not None:
                 raise ValueError("Chunked score centering currently requires untruncated sampling")
-            return chunked_score_centered_lm_head(
-                hidden_states, self.weight, labels, temperature, *score_centering
-            )
+            return chunked_score_centered_lm_head(hidden_states, self.weight, labels, temperature, *score_centering)
         # VanillaOutputLinear just returns logits. train.py applies temperature
         # scaling and sampling-mask replay.
         return PrimeLmOutput(logits=super().forward(hidden_states))

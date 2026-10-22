@@ -187,12 +187,19 @@ def chunked_score_centered_lm_head(
     parts = []
     for start in range(0, labels.numel(), chunk_size):
         end = start + chunk_size
-        parts.append(checkpoint(
-            project, hidden[start:end], weight, labels[start:end], temperature[start:end],
-            head_ids[start:end] if head_ids is not None else None,
-            head_logprobs[start:end] if head_logprobs is not None else None,
-            active[start:end], use_reentrant=False,
-        ))
+        parts.append(
+            checkpoint(
+                project,
+                hidden[start:end],
+                weight,
+                labels[start:end],
+                temperature[start:end],
+                head_ids[start:end] if head_ids is not None else None,
+                head_logprobs[start:end] if head_logprobs is not None else None,
+                active[start:end],
+                use_reentrant=False,
+            )
+        )
     return {
         key: torch.cat([part[i] for part in parts]).reshape(shape)
         for i, key in enumerate(("logprobs", "entropy", "score_correction"))
