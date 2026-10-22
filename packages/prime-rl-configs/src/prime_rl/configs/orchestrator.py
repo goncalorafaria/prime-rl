@@ -43,6 +43,9 @@ class ModelConfig(BaseModelConfig):
 
 
 class TrainSamplingConfig(BaseConfig):
+    score_centering_top_k: int | None = Field(None, ge=1)
+    """Record processed sampler top-k probabilities; does not truncate the sampler."""
+
     temperature: float = Field(1.0, ge=0, le=2.0)
     """Sampling temperature."""
 
@@ -97,6 +100,9 @@ class TrainSamplingConfig(BaseConfig):
         }
         if self.max_completion_tokens is not None:
             args["max_completion_tokens"] = self.max_completion_tokens
+
+        if self.score_centering_top_k is not None:
+            args["score_centering_top_k"] = self.score_centering_top_k
 
         # top_k rides extra_body (like EvalSamplingConfig), overriding the sentinel.
         extra_body = dict(self.extra_body)

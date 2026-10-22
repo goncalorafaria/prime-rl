@@ -40,6 +40,7 @@ from prime_rl.configs.trainer import (
 from prime_rl.configs.trainer import (
     TokenizerConfig,
     TrainerConfig,
+    uses_score_centering,
 )
 from prime_rl.utils.config import BaseConfig, default_output_dir, find_package_resource
 from prime_rl.utils.validation import (
@@ -421,6 +422,30 @@ class RLConfig(BaseConfig):
         for prime in (self.monitors.prime, self.orchestrator.monitors.prime):
             if prime is not None and prime.name is None:
                 prime.name = self.run.name
+        return self
+
+    @model_validator(mode="after")
+    def validate_score_centering_sampler(self):
+        if not uses_score_centering(self.trainer.loss):
+            return self
+        requested = 0
+        for source in self.orchestrator.train.source:
+            if source.algo is not None and source.algo.sampling.source != "policy":
+                continue
+            sampling = source.sampling
+            if sampling.score_centering_top_k is None or sampling.temperature <= 0:
+                raise ValueError(
+                    "score_centering requires score_centering_top_k and positive temperature on policy sources"
+                )
+            requested = max(requested, sampling.score_centering_top_k)
+        if self.inference is not None:
+            extra = self.inference.vllm.model_extra or {}
+            if (extra.get("logprobs_mode") or "processed_logprobs") != "processed_logprobs":
+                raise ValueError("score_centering requires processed_logprobs")
+            limit = extra.get("max_logprobs")
+            limit = 20 if limit is None else limit
+            if limit != -1 and limit < requested:
+                raise ValueError("inference.vllm.max_logprobs must cover score_centering_top_k")
         return self
 
     ### Validate shared configs (after sub-config construction)

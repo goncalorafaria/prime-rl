@@ -17,6 +17,7 @@ class PrimeLmOutput(TypedDict, total=False):
     logits: Tensor | None
     logprobs: Tensor | None
     entropy: Tensor | None
+    score_correction: Tensor | None
     loss: Tensor | None
 
 
@@ -31,6 +32,11 @@ def cast_float_and_contiguous(output: PrimeLmOutput) -> PrimeLmOutput:
         logprobs=_float_and_contiguous(output.get("logprobs")),
         entropy=_float_and_contiguous(output.get("entropy")),
         loss=output.get("loss"),
+        **(
+            {"score_correction": _float_and_contiguous(output["score_correction"])}
+            if "score_correction" in output
+            else {}
+        ),
     )
 
 
@@ -75,7 +81,14 @@ class VanillaOutputLinear(torch.nn.Linear):
         labels: torch.Tensor | None = None,
         temperature: Tensor | None = None,
         sampling_mask: Tensor | None = None,
+        score_centering: tuple | None = None,
     ) -> PrimeLmOutput:
+        if score_centering is not None:
+            from prime_rl.trainer.rl.score_centering import chunked_score_centered_lm_head
+
+            if sampling_mask is not None:
+                raise ValueError("Chunked score centering currently requires untruncated sampling")
+            return chunked_score_centered_lm_head(hidden_states, self.weight, labels, temperature, *score_centering)
         # VanillaOutputLinear just returns logits. train.py applies temperature
         # scaling and sampling-mask replay.
         return PrimeLmOutput(logits=super().forward(hidden_states))
@@ -327,6 +340,7 @@ def _patch_model_forward(model: nn.Module) -> None:
         logits_to_keep: int = 0,
         temperature: torch.Tensor | None = None,
         sampling_mask: torch.Tensor | None = None,
+        score_centering: tuple | None = None,
         **kwargs: object,
     ) -> PrimeLmOutput:
         # For VLM with images, don't create position_ids - let model compute MRoPE internally
@@ -345,12 +359,16 @@ def _patch_model_forward(model: nn.Module) -> None:
             slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) and logits_to_keep > 0 else slice(None)
         )
 
+        if score_centering is not None and logits_to_keep != 0:
+            raise ValueError("Chunked score centering requires all token positions")
+
         # Pass through the wrapped lm_head
         return self.lm_head(
             hidden_states[:, slice_indices, :],
             labels[:, slice_indices] if labels is not None else None,
             temperature=temperature[:, slice_indices] if temperature is not None else None,
             sampling_mask=sampling_mask[:, slice_indices] if sampling_mask is not None else None,
+            **({"score_centering": score_centering} if score_centering is not None else {}),
         )
 
     # Bind the new forward to the model

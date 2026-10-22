@@ -1064,6 +1064,7 @@ def forward(
     temperature: Tensor | None = None,
     routed_experts: Int[Tensor, "batch seq layers topk"] | None = None,
     sampling_mask: Int[Tensor, "batch seq mask"] | None = None,
+    score_centering: tuple | None = None,
     # Generic multimodal kwargs (e.g. {"pixel_values": ...,
     # "image_grid_thw": ...} for Qwen3-VL; just {"pixel_values": ...}
     # for Gemma3). Passed straight through to ``model(**kwargs)`` so
@@ -1085,6 +1086,8 @@ def forward(
     # forwards don't know the kwarg, so only pass it when present.
     if sampling_mask is not None:
         kwargs["sampling_mask"] = sampling_mask
+    if score_centering is not None:
+        kwargs["score_centering"] = score_centering
 
     if mm_kwargs:
         # Forward the per-model multimodal tensors verbatim, plus the

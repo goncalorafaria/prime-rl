@@ -580,6 +580,9 @@ class BaseRLLossConfig(BaseConfig):
 
 
 class IPOLossConfig(BaseRLLossConfig):
+    score_centering: bool = False
+    """Subtract the detached sampler expectation of the masked importance-weighted score."""
+
     type: Literal["ipo"] = "ipo"
     eps: float = Field(0.3, ge=0)
     """Maximum absolute probability change before a token is masked."""
@@ -592,6 +595,9 @@ class IPOLossConfig(BaseRLLossConfig):
 
 
 class IcePopLossConfig(BaseRLLossConfig):
+    score_centering: bool = False
+    """Subtract the detached sampler expectation of the masked importance-weighted score."""
+
     type: Literal["icepop"] = "icepop"
 
     ratio_low: float = Field(0.2, gt=0)
@@ -621,6 +627,10 @@ class CustomLossConfig(BaseRLLossConfig):
 
 
 LossConfig: TypeAlias = Annotated[IPOLossConfig | IcePopLossConfig | CustomLossConfig, Field(discriminator="type")]
+
+
+def uses_score_centering(loss: LossConfig) -> bool:
+    return isinstance(loss, (IPOLossConfig, IcePopLossConfig)) and loss.score_centering
 
 
 class FakeDataLoaderConfig(BaseConfig):
@@ -733,6 +743,9 @@ class TrainerConfig(BaseConfig):
     dist_timeout_seconds: int = 3600
     """Timeout in seconds for torch distributed ops."""
 
+    score_centering_token_chunk_size: int | None = Field(default=None, gt=0)
+    """Checkpoint score-centered LM-head projection in token chunks for custom Qwen3/Qwen3.5 and compatible wrapped models."""
+
     heartbeat: HeartbeatConfig | None = None
     """BetterStack heartbeat configuration for monitoring training progress."""
 
@@ -741,6 +754,12 @@ class TrainerConfig(BaseConfig):
 
     env_vars: EnvVars = {}
     """Extra environment variables for the trainer process(es). Merged on top of the launcher defaults."""
+
+    @model_validator(mode="after")
+    def score_centering_requires_logits(self):
+        if uses_score_centering(self.loss) and self.model.fused_lm_head_token_chunk_size != "disabled":
+            raise ValueError("score_centering requires model.fused_lm_head_token_chunk_size='disabled'")
+        return self
 
     @model_validator(mode="after")
     def deepep_disables_grad_clipping(self):

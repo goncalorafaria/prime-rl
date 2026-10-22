@@ -12,6 +12,9 @@ deltas here:
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import numpy as np
 import pybase64
 from vllm.entrypoints.scale_out.token_in_token_out.protocol import GenerateResponse, GenerateResponseChoice
@@ -21,6 +24,7 @@ from prime_rl.inference.vllm.routed_experts import serialize_routed_experts
 from prime_rl.inference.vllm.serving_tokens import (
     PrimeRlServingTokens,
     _GenerateRoutedExpertsCapture,
+    _SamplerHeadCapture,
 )
 
 
@@ -86,3 +90,42 @@ def test_generate_response_post_process_replaces_upstream_routed_experts():
     payload = processed.model_dump(mode="json")
     assert payload["choices"][0]["routed_experts"] == compact_routed_experts
     assert payload["usage"]["total_tokens"] == 7
+
+
+def test_sampler_head_capture_packs_head_and_trims_logprobs():
+    from vllm.logprobs import FlatLogprobs
+
+    flat = FlatLogprobs()
+    flat.append_fast([7, 7, 9, 0], [-0.25, -0.25, -1.5, float("-inf")], iter([2, 1, 2, 3]), [None] * 4)
+    flat.append_fast([8, 3, 4], [-0.0, float("-inf"), float("-inf")], iter([1, 1, 2]), [None] * 3)
+    output = SimpleNamespace(index=0, logprobs=flat)
+
+    async def outputs():
+        yield SimpleNamespace(outputs=[output])
+
+    capture = _SamplerHeadCapture(outputs())
+
+    async def drain():
+        return [item async for item in capture]
+
+    asyncio.run(drain())
+
+    head = capture.sampler_heads[0]
+    counts = np.frombuffer(pybase64.b64decode(head["counts"]), dtype=np.int32)
+    ids = np.frombuffer(pybase64.b64decode(head["ids"]), dtype=np.int32)
+    assert counts.tolist() == [2, 1]
+    assert ids.tolist() == [7, 9, 8]
+    # Upstream now serializes only the sampled token at each position.
+    assert len(output.logprobs) == 2
+    assert [list(output.logprobs[i].keys()) for i in range(2)] == [[7], [8]]
+    assert output.logprobs[0][7].logprob == -0.25
+
+    response = GenerateResponse(
+        request_id="request-id",
+        model="test-model",
+        choices=[GenerateResponseChoice(index=0, token_ids=[7, 8])],
+        usage=UsageInfo(prompt_tokens=4, completion_tokens=2, total_tokens=6),
+    )
+    payload = capture.post_process(response).model_dump(mode="json")
+    assert payload["choices"][0]["sampler_head"] == head
+    assert payload["choices"][0]["token_ids"] == [7, 8]

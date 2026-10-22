@@ -228,6 +228,8 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
         temperature: Optional[torch.Tensor] = None,
+        sampling_mask: Optional[torch.Tensor] = None,
+        score_centering: tuple | None = None,
         *,
         seq_lens: torch.LongTensor,
         seq_lens_are_pre_shard: bool = False,
@@ -259,11 +261,15 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
             seq_lens_are_pre_shard=seq_lens_are_pre_shard,
         )
         hidden_states = outputs.last_hidden_state
+        if score_centering is not None and logits_to_keep != 0:
+            raise ValueError("score_centering requires logits_to_keep=0")
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         return self.lm_head(
             hidden_states[:, slice_indices, :],
             labels[:, slice_indices] if labels is not None else None,
             temperature=temperature,
+            sampling_mask=sampling_mask,
+            **({"score_centering": score_centering} if score_centering is not None else {}),
         )
 
     def init_buffers_post_meta(self):

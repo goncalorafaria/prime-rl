@@ -35,6 +35,8 @@ class TensorMicroBatch(TypedDict):
     trace_ids: list[str] | None
     branch_indices: list[int] | None
     rl_group_denominators: list[int] | None
+    sampler_head_ids: Tensor | None
+    sampler_head_logprobs: Tensor | None
 
     # Batch level
     lora_num_tokens: Int[Tensor, "n_loras"]
@@ -132,6 +134,8 @@ class FakeDataLoader:
             "trace_ids": None,
             "branch_indices": None,
             "rl_group_denominators": None,
+            "sampler_head_ids": None,
+            "sampler_head_logprobs": None,
             "loss_mask": loss_mask.unsqueeze(0),
             "lora_num_tokens": torch.tensor([input_ids.shape[0]], dtype=torch.int32),
             "seq_lens": torch.tensor(sequence_lengths, dtype=torch.long),
@@ -165,6 +169,8 @@ class FakeDataLoader:
             "trace_ids": None,
             "branch_indices": None,
             "rl_group_denominators": None,
+            "sampler_head_ids": None,
+            "sampler_head_logprobs": None,
             "loss_mask": torch.ones(self.seq_len, dtype=torch.bool).unsqueeze(0),
             "lora_num_tokens": torch.tensor([self.seq_len], dtype=torch.int32),
             "seq_lens": torch.tensor([self.seq_len], dtype=torch.long),
@@ -235,7 +241,17 @@ class DataLoader:
             padded = np.full((len(counts), max_mask_size), -1, dtype=np.int32)
             padded[np.arange(max_mask_size)[None, :] < counts[:, None]] = ids
             sampling_mask = torch.from_numpy(padded).unsqueeze(0)
+        head_ids = head_logps = None
+        if micro_batch.sampler_head_ids is not None:
+            k = max(1, max(map(len, micro_batch.sampler_head_ids), default=0))
+            head_ids = torch.full((1, len(micro_batch.input_ids), k), -1, dtype=torch.long)
+            head_logps = torch.zeros((1, len(micro_batch.input_ids), k), dtype=torch.float)
+            for i, (ids, logps) in enumerate(zip(micro_batch.sampler_head_ids, micro_batch.sampler_head_logprobs)):
+                head_ids[0, i, : len(ids)] = torch.tensor(ids, dtype=torch.long)
+                head_logps[0, i, : len(ids)] = torch.tensor(logps, dtype=torch.float)
         return TensorMicroBatch(
+            sampler_head_ids=head_ids,
+            sampler_head_logprobs=head_logps,
             input_ids=torch.tensor(micro_batch.input_ids, dtype=torch.long).unsqueeze(0),
             position_ids=torch.tensor(micro_batch.position_ids, dtype=torch.long).unsqueeze(0),
             advantages=torch.tensor(micro_batch.advantages, dtype=torch.float).unsqueeze(0),

@@ -340,6 +340,7 @@ class Qwen3_5ForCausalLM(Qwen3_5PreTrainedModel):
         labels: torch.LongTensor | None = None,
         temperature: torch.Tensor | None = None,
         sampling_mask: torch.Tensor | None = None,
+        score_centering: tuple | None = None,
         routed_experts: torch.LongTensor | None = None,
         pixel_values: torch.Tensor | None = None,
         image_grid_thw: torch.LongTensor | None = None,
@@ -374,6 +375,7 @@ class Qwen3_5ForCausalLM(Qwen3_5PreTrainedModel):
             labels,
             temperature=temperature,
             sampling_mask=sampling_mask,
+            **({"score_centering": score_centering} if score_centering is not None else {}),
         )
 
     def init_buffers_post_meta(self) -> None:

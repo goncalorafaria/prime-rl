@@ -24,6 +24,14 @@ def apply_shared_vllm_patches():
     monkey_patch_deepseek_v4_per_layer_rope()
     monkey_patch_deepseek_v4_bf16_o_proj()
 
+    from prime_rl.inference.vllm.flashinfer_sampler_head import patch_flashinfer_sampler_head
+
+    patch_flashinfer_sampler_head()
+
+    from prime_rl.inference.vllm.compact_logprobs import patch_compact_logprobs
+
+    patch_compact_logprobs()
+
 
 def monkey_patch_deepseek_v4_allowed_layer_types():
     """Let vLLM's `DeepseekV4Config` construct under a transformers pin below 5.15.

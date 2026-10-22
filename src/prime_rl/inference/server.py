@@ -20,6 +20,23 @@ def setup_vllm_env(config: InferenceConfig):
         use_v2_runner = config.deployment.type != "disaggregated"
         os.environ.setdefault("VLLM_USE_V2_MODEL_RUNNER", "1" if use_v2_runner else "0")
 
+    os.environ.setdefault("VLLM_USE_V2_MODEL_RUNNER", "1")
+    os.environ.setdefault("VLLM_USE_COMPACT_LOGPROBS", os.environ["VLLM_USE_V2_MODEL_RUNNER"])
+    if os.environ.get("VLLM_USE_COMPACT_LOGPROBS") == "1" and os.environ["VLLM_USE_V2_MODEL_RUNNER"] != "1":
+        raise ValueError("VLLM_USE_COMPACT_LOGPROBS requires VLLM_USE_V2_MODEL_RUNNER=1")
+
+    if os.environ.get("VLLM_PRIME_FLASHINFER_SAMPLER_HEAD") == "1":
+        os.environ.setdefault("VLLM_USE_V2_MODEL_RUNNER", "1")
+        if os.environ["VLLM_USE_V2_MODEL_RUNNER"] != "1":
+            raise ValueError("VLLM_PRIME_FLASHINFER_SAMPLER_HEAD requires VLLM_USE_V2_MODEL_RUNNER=1")
+        if (getattr(config.vllm, "logprobs_mode", None) or "processed_logprobs") != "processed_logprobs":
+            raise ValueError("VLLM_PRIME_FLASHINFER_SAMPLER_HEAD requires logprobs_mode=processed_logprobs")
+
+    if os.environ.get("VLLM_PRIME_COMPACT_LOGPROBS") == "1":
+        os.environ.setdefault("VLLM_USE_V2_MODEL_RUNNER", "1")
+        if os.environ["VLLM_USE_V2_MODEL_RUNNER"] != "1":
+            raise ValueError("VLLM_PRIME_COMPACT_LOGPROBS requires VLLM_USE_V2_MODEL_RUNNER=1")
+
     # vLLM 0.24.0 flipped VLLM_ENFORCE_STRICT_TOOL_CALLING's default to True, which
     # grammar-constrains generation (xgrammar structural tags) for tool_choice
     # "required"/named and strict tools — a sampling distribution the trainer never
