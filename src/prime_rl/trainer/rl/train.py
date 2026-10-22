@@ -464,6 +464,9 @@ def train(config: TrainerConfig):
                     seq_lens_are_pre_shard=seq_lens_are_pre_shard,
                     routed_experts=routed_experts,
                     sampling_mask=sampling_mask,
+                    score_centering=(
+                        head_ids, head_logprobs, active_rl, config.loss, config.score_centering_token_chunk_size
+                    ) if uses_score_centering(config.loss) and config.score_centering_token_chunk_size else None,
                 )
 
             if out.get("logprobs") is None:

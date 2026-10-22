@@ -385,11 +385,18 @@ def prepare_sample(training_example: TrainingSample, seq_len: int) -> MicroBatch
         if len(sampler_head_ids) != len(input_ids) or len(sampler_head_logprobs) != len(input_ids):
             raise ValueError("Sampler head rows must align with tokens")
         for ids, logps in zip(sampler_head_ids, sampler_head_logprobs):
+            # Empty prefix rows need no numerical validation. Keep mismatched
+            # empty/nonempty rows on the reference error path.
+            if not ids and not logps:
+                continue
             if len(ids) != len(logps) or len(set(ids)) != len(ids) or any(i < 0 for i in ids):
                 raise ValueError("Invalid or duplicate sampler head token ids")
-            if any(not np.isfinite(lp) or lp > 0 for lp in logps):
+            # Same float-list dtype and row-wise reduction as the reference,
+            # but avoid one Python/NumPy call per logprob.
+            logp_array = np.asarray(logps)
+            if not np.isfinite(logp_array).all() or (logp_array > 0).any():
                 raise ValueError("Sampler head logprobs must be finite and nonpositive")
-            if np.exp(logps).sum() > 1.0 + 1e-5:
+            if np.exp(logp_array).sum() > 1.0 + 1e-5:
                 raise ValueError("Sampler head probability mass exceeds one")
     if training_example.advantages is not None:
         advantages = list(training_example.advantages)

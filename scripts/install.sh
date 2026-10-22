@@ -138,6 +138,7 @@ main() {
   uv tool install prime
 
   log_info "Syncing virtual environment..."
+  source scripts/vllm-build-env.sh
   uv sync --all-extras
 
   log_info "Installing pre-commit hooks..."

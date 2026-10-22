@@ -107,7 +107,8 @@ def masked_score_correction(
         safe_lp = torch.where(support, lp, 0.0)
         with torch.no_grad():
             p = lp.exp()
-            qhead = torch.where(valid, hq, 0.0).exp() * valid
+            # Match the FP32 probability accumulator before exponentiation.
+            qhead = torch.where(valid, hq.to(p.dtype), 0.0).exp() * valid
             in_head = torch.zeros_like(z, dtype=torch.int32).scatter_add_(-1, safe_ids, valid.int()) > 0
             tail = p.masked_fill(in_head, 0.0)
             mass = tail.sum(-1, keepdim=True)
@@ -143,3 +144,56 @@ def masked_score_correction(
         )
         correction = correction.index_copy(0, rows, values)
     return correction.reshape_as(active)
+
+
+def chunked_score_centered_lm_head(
+    hidden: Tensor,
+    weight: Tensor,
+    labels: Tensor,
+    temperature: Tensor,
+    head_ids: Tensor | None,
+    head_logprobs: Tensor | None,
+    active: Tensor,
+    config: IPOLossConfig | IcePopLossConfig,
+    chunk_size: int,
+) -> dict[str, Tensor]:
+    """Checkpoint projection and normalization together to bound vocabulary memory.
+
+    Uses the same FP32 normalization and correction as the dense trainer path.
+    Only token-sized outputs survive the forward pass; vocabulary logits are
+    recomputed one chunk at a time during backward.
+    """
+    shape = labels.shape
+    hidden = hidden.reshape(-1, hidden.shape[-1])
+    labels = labels.reshape(-1)
+    temperature = temperature.reshape(-1)
+    active = active.reshape(-1)
+    if head_ids is not None:
+        head_ids = head_ids.reshape(-1, head_ids.shape[-1])
+        head_logprobs = head_logprobs.reshape_as(head_ids)
+
+    def project(h, w, target, temp, ids, logq, enabled):
+        # The dense model wrapper casts raw logits to FP32 before scaling.
+        z = (h @ w.t()).float() / temp.unsqueeze(-1)
+        logz = z.logsumexp(-1)
+        lp = z.gather(-1, target.unsqueeze(-1)).squeeze(-1) - logz
+        with torch.no_grad():
+            entropy = logz - (z.softmax(-1) * z).sum(-1)
+        correction = z[:, 0] * 0.0
+        if ids is not None:
+            correction = masked_score_correction(z, ids, logq, target, enabled, config, chunk_size=chunk_size)
+        return lp, entropy, correction
+
+    parts = []
+    for start in range(0, labels.numel(), chunk_size):
+        end = start + chunk_size
+        parts.append(checkpoint(
+            project, hidden[start:end], weight, labels[start:end], temperature[start:end],
+            head_ids[start:end] if head_ids is not None else None,
+            head_logprobs[start:end] if head_logprobs is not None else None,
+            active[start:end], use_reentrant=False,
+        ))
+    return {
+        key: torch.cat([part[i] for part in parts]).reshape(shape)
+        for i, key in enumerate(("logprobs", "entropy", "score_correction"))
+    }

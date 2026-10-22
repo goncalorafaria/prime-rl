@@ -743,6 +743,9 @@ class TrainerConfig(BaseConfig):
     dist_timeout_seconds: int = 3600
     """Timeout in seconds for torch distributed ops."""
 
+    score_centering_token_chunk_size: int | None = Field(default=None, gt=0)
+    """Checkpoint score-centered LM-head projection in token chunks for custom Qwen3/Qwen3.5 and compatible wrapped models."""
+
     heartbeat: HeartbeatConfig | None = None
     """BetterStack heartbeat configuration for monitoring training progress."""
 
