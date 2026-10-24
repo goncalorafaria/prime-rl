@@ -4,6 +4,7 @@ from typing import TypedDict
 import numpy as np
 import torch
 from jaxtyping import Bool, Float, Int
+from renderers import packed_heads as ph
 from torch import Tensor
 
 from prime_rl.configs.trainer import FakeDataLoaderConfig
@@ -243,12 +244,11 @@ class DataLoader:
             sampling_mask = torch.from_numpy(padded).unsqueeze(0)
         head_ids = head_logps = None
         if micro_batch.sampler_head_ids is not None:
-            k = max(1, max(map(len, micro_batch.sampler_head_ids), default=0))
-            head_ids = torch.full((1, len(micro_batch.input_ids), k), -1, dtype=torch.long)
-            head_logps = torch.zeros((1, len(micro_batch.input_ids), k), dtype=torch.float)
-            for i, (ids, logps) in enumerate(zip(micro_batch.sampler_head_ids, micro_batch.sampler_head_logprobs)):
-                head_ids[0, i, : len(ids)] = torch.tensor(ids, dtype=torch.long)
-                head_logps[0, i, : len(ids)] = torch.tensor(logps, dtype=torch.float)
+            ids_array, logps_array = ph.dense(
+                micro_batch.sampler_head_ids, micro_batch.sampler_head_logprobs, len(micro_batch.input_ids)
+            )
+            head_ids = torch.from_numpy(ids_array).unsqueeze(0)
+            head_logps = torch.from_numpy(logps_array).unsqueeze(0)
         return TensorMicroBatch(
             sampler_head_ids=head_ids,
             sampler_head_logprobs=head_logps,
