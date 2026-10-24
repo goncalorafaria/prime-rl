@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+from renderers import packed_heads as ph
 
 from prime_rl.transports.batch.types import EncodedTensor, MicroBatch, RoutedExperts, SamplingMask, TrainingSample
 
@@ -382,15 +383,9 @@ def prepare_sample(training_example: TrainingSample, seq_len: int) -> MicroBatch
     if (sampler_head_ids is None) != (sampler_head_logprobs is None):
         raise ValueError("Sampler head ids and logprobs must be supplied together")
     if sampler_head_ids is not None:
-        if len(sampler_head_ids) != len(input_ids) or len(sampler_head_logprobs) != len(input_ids):
-            raise ValueError("Sampler head rows must align with tokens")
-        for ids, logps in zip(sampler_head_ids, sampler_head_logprobs):
-            if len(ids) != len(logps) or len(set(ids)) != len(ids) or any(i < 0 for i in ids):
-                raise ValueError("Invalid or duplicate sampler head token ids")
-            if any(not np.isfinite(lp) or lp > 0 for lp in logps):
-                raise ValueError("Sampler head logprobs must be finite and nonpositive")
-            if np.exp(logps).sum() > 1.0 + 1e-5:
-                raise ValueError("Sampler head probability mass exceeds one")
+        sampler_head_ids = ph.pack(sampler_head_ids, np.int32)
+        sampler_head_logprobs = ph.pack(sampler_head_logprobs, np.float32)
+        ph.validate(sampler_head_ids, sampler_head_logprobs, len(input_ids))
     if training_example.advantages is not None:
         advantages = list(training_example.advantages)
     else:
@@ -436,8 +431,8 @@ def prepare_sample(training_example: TrainingSample, seq_len: int) -> MicroBatch
         loss_mask = loss_mask[:cut]
         inference_logprobs = inference_logprobs[:cut]
         if sampler_head_ids is not None:
-            sampler_head_ids = sampler_head_ids[:cut]
-            sampler_head_logprobs = sampler_head_logprobs[:cut]
+            sampler_head_ids = ph.prefix(sampler_head_ids, cut, np.int32)
+            sampler_head_logprobs = ph.prefix(sampler_head_logprobs, cut, np.float32)
         position_ids = position_ids[:cut]
         advantages = advantages[:cut]
         temperatures = temperatures[:cut]
@@ -632,8 +627,8 @@ def _materialize_bin(bin_content: _MicroBatchBin) -> MicroBatch:
         advantages.extend(sample.advantages)
         inference_logprobs.extend(sample.inference_logprobs)
         if has_head:
-            sampler_head_ids.extend(sample.sampler_head_ids or [[] for _ in range(sample_len)])
-            sampler_head_logprobs.extend(sample.sampler_head_logprobs or [[] for _ in range(sample_len)])
+            sampler_head_ids.append(ph.pack(sample.sampler_head_ids, np.int32, sample_len))
+            sampler_head_logprobs.append(ph.pack(sample.sampler_head_logprobs, np.float32, sample_len))
         position_ids.extend(sample.position_ids)
         temperatures.extend(sample.temperatures)
         env_names.extend(sample.env_names)
@@ -673,6 +668,9 @@ def _materialize_bin(bin_content: _MicroBatchBin) -> MicroBatch:
         if group_denominators is not None:
             group_denominators.extend(sample.rl_group_denominators)
 
+    if has_head:
+        sampler_head_ids = ph.concat(sampler_head_ids)
+        sampler_head_logprobs = ph.concat(sampler_head_logprobs)
     sequence_lengths = [len(sample.input_ids) for sample in bin_content.samples]
     assert sum(sequence_lengths) == len(input_ids), (sequence_lengths, len(input_ids))
     assert sum(seq_lens) == len(input_ids), (seq_lens, len(input_ids))
@@ -805,8 +803,8 @@ def pad_micro_batch(micro_batch: MicroBatch, pad_to_multiple_of: int) -> MicroBa
     micro_batch.seq_lens[-1] += padding_size
     micro_batch.inference_logprobs.extend([0.0] * padding_size)
     if micro_batch.sampler_head_ids is not None:
-        micro_batch.sampler_head_ids.extend([[] for _ in range(padding_size)])
-        micro_batch.sampler_head_logprobs.extend([[] for _ in range(padding_size)])
+        micro_batch.sampler_head_ids = ph.pad(micro_batch.sampler_head_ids, padding_size)
+        micro_batch.sampler_head_logprobs = ph.pad(micro_batch.sampler_head_logprobs, padding_size)
     # Use temperature 1.0 for padding tokens (doesn't matter since loss_mask is False)
     micro_batch.temperatures.extend([1.0] * padding_size)
     if micro_batch.ref_logprobs is not None:
@@ -852,9 +850,12 @@ def _assert_token_arrays_aligned(micro_batch: MicroBatch) -> None:
     )
     for name in per_token_fields:
         values = getattr(micro_batch, name)
-        assert values is None or len(values) == num_tokens, (
-            f"{name} misaligned after packing: {len(values)} != {num_tokens} tokens"
+        size = (
+            ph.row_count(values)
+            if values is not None and name.startswith("sampler_head_")
+            else (len(values) if values is not None else num_tokens)
         )
+        assert size == num_tokens, f"{name} misaligned after packing: {size} != {num_tokens} tokens"
     assert sum(micro_batch.sequence_lengths) == num_tokens, (
         f"sequence_lengths sum {sum(micro_batch.sequence_lengths)} != {num_tokens} tokens"
     )

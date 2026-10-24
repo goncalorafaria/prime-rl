@@ -112,7 +112,9 @@ def test_sampler_head_survives_trace_packing_and_tensorization():
     import math
 
     import msgspec
+    import numpy as np
     import verifiers.v1 as vf
+    from renderers import packed_heads
     from renderers.client import _parse_sampler_head
     from verifiers.v1.clients.train import response_from_generate
     from verifiers.v1.graph import prepare_turn
@@ -160,7 +162,7 @@ def test_sampler_head_survives_trace_packing_and_tensorization():
     # Exercise the real wire representation, not a hand-constructed Branch.
     trace = vf.Trace.model_validate(msgspec.msgpack.decode(msgspec.msgpack.encode(trace.model_dump(mode="python"))))
     branch = trace.branches[0]
-    assert branch.sampler_head_ids == [[], [], [], [22, 20], [22, 21]]
+    assert branch.sampler_head_ids == packed_heads.pack([[], [], [], [22, 20], [22, 21]], np.int32)
     sample = trace_to_samples(trace, env_name="rubrics")[0]
     sample.group_id = "group"
     sample.temperatures = [1.0] * len(sample.token_ids)
@@ -169,7 +171,10 @@ def test_sampler_head_survives_trace_packing_and_tensorization():
     packed = msgspec.msgpack.decode(msgspec.msgpack.encode(packed), type=MicroBatch)
     tensors = object.__new__(DataLoader)._micro_batch_to_tensor(packed)
     assert tensors["sampler_head_ids"].tolist() == [[[-1, -1], [-1, -1], [-1, -1], [22, 20]]]
-    torch.testing.assert_close(tensors["sampler_head_logprobs"][0, -1], torch.tensor(head_lps[0]))
+    torch.testing.assert_close(
+        tensors["sampler_head_logprobs"][0, -1],
+        torch.from_numpy(packed_heads.arrays(head_lps, np.float32)[1][:2].copy()),
+    )
     assert tensors["rl_group_denominators"] == [1]
     bad = choice.copy()
     bad["logprobs"] = {"content": [{"top_logprobs": []}, {"top_logprobs": []}]}
