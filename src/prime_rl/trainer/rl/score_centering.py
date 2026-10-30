@@ -34,6 +34,29 @@ def icepop_head_correction(
     return (residual * safe_lp).sum(-1)
 
 
+
+def mc_score_correction(logp: Tensor, logq: Tensor, valid: Tensor, config) -> Tensor:
+    """IID q probes estimate E_q[keep * p/q * grad log p], with fixed weights."""
+    if logp.shape[-1] != 32 or not bool(valid.all()):
+        raise ValueError("Every active MC32 position must contain all 32 draws")
+    with torch.no_grad():
+        delta = logp - logq
+        if isinstance(config, IcePopLossConfig):
+            keep = (delta >= logp.new_tensor(config.ratio_low).log()) & (
+                delta <= logp.new_tensor(config.ratio_high).log())
+        elif isinstance(config, IPOLossConfig):
+            keep = (logp.exp() - logq.exp()).abs() <= config.eps
+        else:
+            raise TypeError("MC32 supports IcePop and IPO")
+        # Mask in log space before exp so rejected large ratios cannot overflow.
+        weights = delta.masked_fill(~keep, -torch.inf).exp()
+    return (weights * logp).mean(-1)
+
+
+def mc_forward_kl(logp: Tensor, logq: Tensor) -> Tensor:
+    """Unbiased D_KL(q || p) estimate from IID q probes; may be negative."""
+    return (logq.detach() - logp).mean(-1)
+
 def masked_score_correction(
     logits: Tensor,
     head_ids: Tensor,
@@ -75,7 +98,7 @@ def masked_score_correction(
         if bool((h >= z.shape[-1]).any()):
             raise ValueError("Sampler token id exceeds model vocabulary")
         safe_ids = h.clamp_min(0)
-        if isinstance(config, IcePopLossConfig):
+        if isinstance(config, IcePopLossConfig) or config.score_centering_estimator == "mc32":
             normalizer = z.logsumexp(-1, keepdim=True)
             if support_ids is not None and support_ids.shape[-1] > 0:
                 replay = sampling_replay_mask(support_ids, target)
@@ -92,6 +115,8 @@ def masked_score_correction(
                 if bool((valid & replay.unsqueeze(-1) & ~present).any()):
                     raise ValueError("Sampler head falls outside the replayed sampling support")
             head_logp = z.gather(-1, safe_ids) - normalizer
+            if config.score_centering_estimator == "mc32":
+                return mc_score_correction(head_logp, hq, valid, config)
             return icepop_head_correction(head_logp, hq, valid, config)
         support = torch.ones_like(z, dtype=torch.bool)
         if support_ids is not None:
@@ -187,19 +212,12 @@ def chunked_score_centered_lm_head(
     parts = []
     for start in range(0, labels.numel(), chunk_size):
         end = start + chunk_size
-        parts.append(
-            checkpoint(
-                project,
-                hidden[start:end],
-                weight,
-                labels[start:end],
-                temperature[start:end],
-                head_ids[start:end] if head_ids is not None else None,
-                head_logprobs[start:end] if head_logprobs is not None else None,
-                active[start:end],
-                use_reentrant=False,
-            )
-        )
+        parts.append(checkpoint(
+            project, hidden[start:end], weight, labels[start:end], temperature[start:end],
+            head_ids[start:end] if head_ids is not None else None,
+            head_logprobs[start:end] if head_logprobs is not None else None,
+            active[start:end], use_reentrant=False,
+        ))
     return {
         key: torch.cat([part[i] for part in parts]).reshape(shape)
         for i, key in enumerate(("logprobs", "entropy", "score_correction"))

@@ -580,6 +580,7 @@ class BaseRLLossConfig(BaseConfig):
 
 
 class IPOLossConfig(BaseRLLossConfig):
+    score_centering_estimator: Literal["topk", "mc32"] = "topk"
     score_centering: bool = False
     """Subtract the detached sampler expectation of the masked importance-weighted score."""
 
@@ -595,6 +596,7 @@ class IPOLossConfig(BaseRLLossConfig):
 
 
 class IcePopLossConfig(BaseRLLossConfig):
+    score_centering_estimator: Literal["topk", "mc32"] = "topk"
     score_centering: bool = False
     """Subtract the detached sampler expectation of the masked importance-weighted score."""
 

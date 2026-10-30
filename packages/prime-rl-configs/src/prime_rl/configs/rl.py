@@ -433,11 +433,19 @@ class RLConfig(BaseConfig):
             if source.algo is not None and source.algo.sampling.source != "policy":
                 continue
             sampling = source.sampling
-            if sampling.score_centering_top_k is None or sampling.temperature <= 0:
-                raise ValueError(
-                    "score_centering requires score_centering_top_k and positive temperature on policy sources"
-                )
-            requested = max(requested, sampling.score_centering_top_k)
+            mc = self.trainer.loss.score_centering_estimator == "mc32"
+            count = sampling.score_centering_samples if mc else sampling.score_centering_top_k
+            if count is None or sampling.temperature <= 0:
+                raise ValueError("score_centering requires matching sampler probes and positive temperature")
+            if mc:
+                if sampling.score_centering_top_k is not None:
+                    raise ValueError("MC32 and top-k heads are mutually exclusive")
+                if sampling.top_p != 1.0 or sampling.top_k is not None:
+                    raise ValueError("MC32 currently requires untruncated sampling")
+            elif sampling.score_centering_samples is not None:
+                raise ValueError("MC32 samples require the mc32 loss estimator")
+            requested = max(requested, count)
+
         if self.inference is not None:
             extra = self.inference.vllm.model_extra or {}
             if (extra.get("logprobs_mode") or "processed_logprobs") != "processed_logprobs":
@@ -445,7 +453,7 @@ class RLConfig(BaseConfig):
             limit = extra.get("max_logprobs")
             limit = 20 if limit is None else limit
             if limit != -1 and limit < requested:
-                raise ValueError("inference.vllm.max_logprobs must cover score_centering_top_k")
+                raise ValueError("inference.vllm.max_logprobs must cover the configured score-centering probes")
         return self
 
     ### Validate shared configs (after sub-config construction)
