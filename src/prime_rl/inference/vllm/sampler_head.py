@@ -75,3 +75,20 @@ def pack_sampler_head(logprobs: Any) -> tuple[dict[str, Any], np.ndarray]:
         "num_positions": int(len(starts)),
     }
     return head, starts
+
+
+def pack_mc_samples(logprobs):
+    from vllm.mc_logprobs import MCLogprobs
+    if not isinstance(logprobs, MCLogprobs):
+        raise ValueError("MC32 response requires the NumPy vLLM MCLogprobs path")
+    starts = logprobs.start_indices
+    n = len(starts)
+    ids = np.ascontiguousarray(logprobs._ids[:n, 1:], dtype=np.int32)
+    lp = np.ascontiguousarray(logprobs._lp[:n, 1:], dtype=np.float32)
+    if (ids < 0).any() or not np.isfinite(lp).all() or (lp > 0).any():
+        raise ValueError("Invalid MC32 probabilities")
+    counts = np.full(len(starts), 32, dtype=np.int32)
+    return {"mode": "mc32", "num_positions": len(starts),
+            "counts": pybase64.b64encode(counts).decode("ascii"),
+            "ids": pybase64.b64encode(ids).decode("ascii"),
+            "logprobs": pybase64.b64encode(lp).decode("ascii")}, starts

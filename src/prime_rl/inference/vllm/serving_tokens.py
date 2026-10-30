@@ -33,7 +33,7 @@ from vllm.logprobs import FlatLogprobs, Logprob
 from vllm.outputs import RequestOutput
 
 from prime_rl.inference.vllm.routed_experts import RoutedExpertsCapture
-from prime_rl.inference.vllm.sampler_head import pack_sampler_head, wants_packed_sampler_head
+from prime_rl.inference.vllm.sampler_head import pack_sampler_head, pack_mc_samples, wants_packed_sampler_head
 
 
 class PrimeRlGenerateResponseChoice(GenerateResponseChoice):
@@ -65,6 +65,15 @@ class _GenerateRoutedExpertsCapture(RoutedExpertsCapture):
 
 def _sampled_only(logprobs: Any, starts: Any) -> FlatLogprobs | list[dict[int, Logprob]]:
     """Each position's sampled-token entry only, in the container type vLLM produced."""
+    from vllm.mc_logprobs import MCLogprobs
+    if isinstance(logprobs, MCLogprobs):
+        n = len(starts)
+        return FlatLogprobs(
+            start_indices=list(range(n)), end_indices=list(range(1, n + 1)),
+            token_ids=logprobs._ids[:n, 0].tolist(),
+            logprobs=logprobs._lp[:n, 0].tolist(),
+            ranks=logprobs._ranks[:n].tolist(), decoded_tokens=[None] * n,
+        )
     if isinstance(logprobs, FlatLogprobs):
         idx = starts.tolist()
         return FlatLogprobs(
@@ -83,7 +92,8 @@ class _SamplerHeadCapture:
     trimming ``output.logprobs`` to the sampled token so upstream serializes one entry
     per generated token."""
 
-    def __init__(self, generator: AsyncGenerator[RequestOutput, None]):
+    def __init__(self, generator: AsyncGenerator[RequestOutput, None], mc32: bool = False):
+        self.mc32 = mc32
         self._generator = generator
         self.sampler_heads: dict[int, dict[str, Any]] = {}
 
@@ -92,7 +102,7 @@ class _SamplerHeadCapture:
             for output in request_output.outputs:
                 if output.logprobs is None:
                     continue
-                head, starts = pack_sampler_head(output.logprobs)
+                head, starts = (pack_mc_samples if self.mc32 else pack_sampler_head)(output.logprobs)
                 self.sampler_heads[output.index] = head
                 output.logprobs = _sampled_only(output.logprobs, starts)
             yield request_output
@@ -111,6 +121,12 @@ class _SamplerHeadCapture:
 
 class PrimeRlServingTokens(ServingTokens):
     """ServingTokens + compact routed experts and sampler heads."""
+
+    async def serve_tokens(self, request, raw_request=None):
+        mc = (request.sampling_params.extra_args or {}).get("score_centering_samples")
+        if mc is not None and request.stream:
+            return self.create_error_response("MC32 requires non-streaming token generation")
+        return await super().serve_tokens(request, raw_request)
 
     async def serve_tokens_full_generator(  # type: ignore[override]
         self,
@@ -132,7 +148,10 @@ class PrimeRlServingTokens(ServingTokens):
             result_generator = capture
         head_capture: _SamplerHeadCapture | None = None
         if wants_packed_sampler_head(request.sampling_params):
-            head_capture = _SamplerHeadCapture(result_generator)
+            head_capture = _SamplerHeadCapture(
+                result_generator,
+                (request.sampling_params.extra_args or {}).get("score_centering_samples") == 32,
+            )
             result_generator = head_capture
 
         response = await super().serve_tokens_full_generator(

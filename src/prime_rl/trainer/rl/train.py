@@ -388,6 +388,9 @@ def train(config: TrainerConfig):
             if uses_score_centering(config.loss) and bool(active_rl.any()):
                 if micro_batch.get("sampler_head_ids") is None:
                     raise ValueError("score_centering requires recorded sampler probabilities")
+                expected_mode = config.loss.score_centering_estimator.encode()
+                if micro_batch.get("sampler_head_mode", b"topk") != expected_mode:
+                    raise ValueError("Trainer estimator does not match recorded sampler mode")
                 head_ids = shift_tensor_left(micro_batch["sampler_head_ids"].to("cuda"), pad_value=-1)
                 head_logprobs = shift_tensor_left(micro_batch["sampler_head_logprobs"].to("cuda"))
                 active_rl = shift_tensor_left(active_rl)
@@ -465,14 +468,8 @@ def train(config: TrainerConfig):
                     routed_experts=routed_experts,
                     sampling_mask=sampling_mask,
                     score_centering=(
-                        head_ids,
-                        head_logprobs,
-                        active_rl,
-                        config.loss,
-                        config.score_centering_token_chunk_size,
-                    )
-                    if uses_score_centering(config.loss) and config.score_centering_token_chunk_size
-                    else None,
+                        head_ids, head_logprobs, active_rl, config.loss, config.score_centering_token_chunk_size
+                    ) if uses_score_centering(config.loss) and config.score_centering_token_chunk_size else None,
                 )
 
             if out.get("logprobs") is None:

@@ -43,6 +43,7 @@ class ModelConfig(BaseModelConfig):
 
 
 class TrainSamplingConfig(BaseConfig):
+    score_centering_samples: Literal[32] | None = None
     score_centering_top_k: int | None = Field(None, ge=1)
     """Record processed sampler top-k probabilities; does not truncate the sampler."""
 
@@ -101,6 +102,8 @@ class TrainSamplingConfig(BaseConfig):
         if self.max_completion_tokens is not None:
             args["max_completion_tokens"] = self.max_completion_tokens
 
+        if self.score_centering_samples is not None:
+            args["score_centering_samples"] = self.score_centering_samples
         if self.score_centering_top_k is not None:
             args["score_centering_top_k"] = self.score_centering_top_k
 

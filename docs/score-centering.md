@@ -174,3 +174,45 @@ the recorded-head correction are retained.
 
 Sampler-head packing skips empty prefix rows and vectorizes probability checks
 within each nonempty row while retaining shape, uniqueness, and mass validation.
+
+## MC32 estimator
+
+Select the Monte Carlo estimator explicitly:
+
+```toml
+[trainer.loss]
+score_centering = true
+score_centering_estimator = "mc32"
+
+[orchestrator.train.sampling]
+score_centering_samples = 32
+temperature = 1.0
+top_p = 1.0
+
+[inference.vllm]
+logprobs_mode = "processed_logprobs"
+max_logprobs = 32
+
+[inference.env_vars]
+VLLM_USE_V2_MODEL_RUNNER = "1"
+VLLM_USE_COMPACT_LOGPROBS = "1"
+VLLM_SCORE_CENTERING_MC32 = "1"
+VLLM_PRIME_COMPACT_LOGPROBS = "0"
+VLLM_PRIME_FLASHINFER_SAMPLER_HEAD = "0"
+```
+
+Omit `top_k` and `score_centering_top_k`, including per-source overrides. MC32
+requires positive temperature, untruncated sampling, token stops without
+detokenization, and no speculative decoding. It needs the matching vLLM fork's
+MC32 sampler. The default estimator remains `topk`.
+
+At each response position,32 independent categorical probes are drawn with
+replacement from processed rollout probabilities. The sampled response token is
+separate; repeated probe IDs are retained. The trainer uses exact normalized
+log probabilities and the existing loss mask to estimate the score-centering
+surrogate. The NumPy packed transport preserves a mode tag through Renderers,
+Verifiers, batch packing and tensorization, rejecting mismatched response modes.
+The helper is packaged as `renderers.packed_heads`; no launch-local module is
+required. This does not change existing KL penalties or numerical dtype defaults.
+The estimator's conditional sampling guarantee does not imply that the entire RL
+algorithm is unbiased.
